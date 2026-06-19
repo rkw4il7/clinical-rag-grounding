@@ -25,11 +25,13 @@ def test_first_line_truncates_long_line() -> None:
 
 
 def test_first_line_truncates_at_whitespace_boundary() -> None:
-    # Space at the truncation point: rstrip drops it, so result is <= max_len.
-    out = first_line("a " * 100)  # "a a a ..." spaces fall on the cut
-    assert len(out) <= _FIRST_LINE_MAX
+    # Space lands exactly at the slice point (index max_len-2): rstrip drops it,
+    # so the result is strictly shorter than max_len.
+    line = "x" * (_FIRST_LINE_MAX - 2) + " trailing" + "y" * 80
+    out = first_line(line)
+    assert len(out) < _FIRST_LINE_MAX  # rstrip consumed the boundary space
     assert out.endswith("…")
-    assert "  " not in out.rstrip("…")
+    assert not out[:-1].endswith(" ")
 
 
 def test_first_line_keeps_short_line_verbatim() -> None:
