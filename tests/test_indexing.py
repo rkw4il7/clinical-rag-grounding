@@ -58,8 +58,10 @@ def test_build_indexing_pipeline_wires_components() -> None:
     assert ("embedder", "writer") in edges
 
 
-# Docling-supported corpus formats we expect under tests/data (spec §7.3).
-_SAMPLE_EXTS = {".pdf", ".docx", ".html", ".htm", ".md", ".pptx", ".csv", ".xlsx"}
+# Corpus formats in scope this phase (spec §7.3: mixed PDF+DOCX+HTML). Other
+# Docling-supported formats are deferred — keep the allowlist to spec scope so a
+# stray .csv/.xlsx doesn't silently produce empty chunks.
+_SAMPLE_EXTS = {".pdf", ".docx", ".html", ".htm"}
 
 
 def _sample_sources() -> list[str]:

@@ -14,6 +14,7 @@ abstention answer and discards any generated prose — but still surfaces the
 
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
@@ -32,6 +33,8 @@ from corpus_rag.settings import Settings, get_settings
 if TYPE_CHECKING:
     from haystack import Document
     from haystack_integrations.document_stores.pgvector import PgvectorDocumentStore
+
+logger = logging.getLogger(__name__)
 
 
 def build_query_pipeline(
@@ -97,6 +100,13 @@ def run_query(
     settings = settings or get_settings()
     pipeline = pipeline or _default_pipeline()
 
+    # Empty/whitespace query → undefined embedding behavior; abstain immediately.
+    if not query.strip():
+        return ABSTENTION_ANSWER, []
+
+    # NOTE: the generator runs unconditionally as part of pipeline.run — even when
+    # the MIN_SCORE gate below will abstain and discard its reply. Acceptable for
+    # this MVP slice; a retriever-only pre-pass would avoid the wasted LLM call.
     result = pipeline.run(
         {"text_embedder": {"text": query}, "prompt_builder": {"query": query}},
         include_outputs_from={"retriever"},
@@ -113,5 +123,9 @@ def run_query(
         return ABSTENTION_ANSWER, documents
 
     replies = result.get("generator", {}).get("replies") or []
-    answer = replies[0] if replies else ABSTENTION_ANSWER
-    return answer, documents
+    if not replies:
+        # Distinct from a grounding abstention: the LLM produced nothing (network
+        # error, context overflow, refusal). Same return, but make it detectable.
+        logger.warning("Generator returned no replies for query %r", query)
+        return ABSTENTION_ANSWER, documents
+    return replies[0], documents

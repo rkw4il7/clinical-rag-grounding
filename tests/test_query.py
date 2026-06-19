@@ -59,6 +59,17 @@ def test_run_query_returns_answer_and_ranked_docs() -> None:
     assert returned == docs  # order preserved, no re-sort
 
 
+@pytest.mark.parametrize("q", ["", "   ", "\n\t"])
+def test_run_query_empty_query_abstains_without_running_pipeline(q: str) -> None:
+    pipeline = _mock_pipeline([Document(content="a", score=0.9)])
+
+    answer, returned = run_query(q, pipeline=pipeline, settings=_settings())
+
+    assert answer == ABSTENTION_ANSWER
+    assert returned == []
+    pipeline.run.assert_not_called()
+
+
 def test_run_query_abstains_on_empty_retrieval() -> None:
     pipeline = _mock_pipeline([], reply="should be discarded")
 
@@ -118,6 +129,8 @@ def _live_pipeline_and_store():
 def test_live_retrieval_count_and_ordering() -> None:
     """§7.5: min(TOP_K, N) docs returned with non-increasing scores."""
     pipeline, store, settings = _live_pipeline_and_store()
+    if settings.min_score > 0.0:
+        pytest.skip("MIN_SCORE>0 post-filters docs; count assertion not applicable.")
     _, docs = run_query(
         "What does the guideline recommend?", pipeline=pipeline, settings=settings
     )
