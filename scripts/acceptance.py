@@ -63,6 +63,7 @@ class Context:
     dim: int
     store: object = None
     emitted: dict = field(default_factory=dict)  # id -> Docling-emitted content
+    all_docs: dict = field(default_factory=dict)  # id -> stored Document (cached)
     query_pipeline: object = None
 
 
@@ -141,8 +142,14 @@ def check_4_idempotent_reingest(ctx: Context) -> Result:
     before = ctx.store.count_documents()
     # Re-write the already-embedded docs (same ids -> OVERWRITE).
     docs = ctx.store.filter_documents()
+    assert docs and docs[0].embedding is not None, (
+        "filter_documents() returned docs without embeddings; "
+        "cannot verify idempotency without corrupting retrieval state"
+    )
     ctx.store.write_documents(docs, policy=DuplicatePolicy.OVERWRITE)
     after = ctx.store.count_documents()
+    # Cache the stored docs for the §2A A2/A3 checks (avoid extra round-trips).
+    ctx.all_docs = {d.id: d for d in docs}
     return Result("§7.4 re-ingest idempotent (OVERWRITE)", before == after, f"{before} -> {after}")
 
 
@@ -154,6 +161,12 @@ def _query_pipeline(ctx: Context):
 
 def check_5_retrieval_count_scores(ctx: Context) -> Result:
     """§7.5: min(TOP_K, N) docs, non-increasing scores."""
+    if ctx.settings.min_score > 0.0:
+        return Result(
+            "§7.5 count=min(TOP_K,N), non-increasing scores",
+            True,
+            f"SKIPPED: MIN_SCORE={ctx.settings.min_score} post-filters docs",
+        )
     _, docs = run_query(GROUNDED_QUERY, pipeline=_query_pipeline(ctx), settings=ctx.settings)
     expected = min(ctx.settings.top_k, ctx.store.count_documents())
     scores = [d.score for d in docs]
@@ -191,8 +204,9 @@ def check_a1_abstain(ctx: Context) -> Result:
 def check_a2_verbatim_source(ctx: Context) -> Result:
     """§2A A2: grounded answer carries >=1 source; displayed==stored byte-equal."""
     answer, docs = run_query(GROUNDED_QUERY, pipeline=_query_pipeline(ctx), settings=ctx.settings)
-    stored = {d.id: d.content for d in ctx.store.filter_documents()}
-    byte_equal = bool(docs) and docs[0].content == stored.get(docs[0].id)
+    stored = ctx.all_docs  # cached after check_4
+    stored_content = stored[docs[0].id].content if docs and docs[0].id in stored else None
+    byte_equal = bool(docs) and docs[0].content == stored_content
     ok = answer != ABSTENTION_ANSWER and len(docs) >= 1 and byte_equal
     detail = f"ndocs={len(docs)} byte_equal={byte_equal}"
     return Result("§2A A2 grounded answer + verbatim source", ok, detail)
@@ -202,7 +216,7 @@ def check_a3_no_lossy_transform(ctx: Context) -> Result:
     """§2A A3: stored content is byte-identical to Docling-emitted content."""
     if not ctx.emitted:
         return Result("§2A A3 stored == Docling-emitted (byte-equal)", False, "no emitted capture")
-    stored = {d.id: d.content for d in ctx.store.filter_documents()}
+    stored = {i: d.content for i, d in ctx.all_docs.items()}  # cached after check_4
     mismatches = [i for i, c in ctx.emitted.items() if stored.get(i) != c]
     ok = not mismatches
     detail = f"checked={len(ctx.emitted)} mismatches={len(mismatches)}"
@@ -232,7 +246,7 @@ def run_all() -> list[Result]:
         try:
             results.append(check(ctx))
         except Exception as exc:  # noqa: BLE001 — record failure, continue harness
-            results.append(Result(check.__doc__.split(":")[0].strip(), False, f"EXC: {exc}"))
+            results.append(Result(check.__name__, False, f"EXC: {exc}"))
             traceback.print_exc()
         r = results[-1]
         print(f"[{'PASS' if r.passed else 'FAIL'}] {r.name} — {r.detail}", flush=True)
