@@ -61,7 +61,12 @@ def test_build_indexing_pipeline_wires_components() -> None:
 def _sample_sources() -> list[str]:
     if not _DATA_DIR.is_dir():
         return []
-    return sorted(str(p) for p in _DATA_DIR.rglob("*") if p.is_file())
+    # Skip dotfiles (e.g. .gitkeep) — Docling rejects unknown formats.
+    return sorted(
+        str(p)
+        for p in _DATA_DIR.rglob("*")
+        if p.is_file() and not p.name.startswith(".")
+    )
 
 
 @pytest.mark.live

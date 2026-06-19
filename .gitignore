@@ -217,3 +217,8 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 .zenflow/
+
+# Sample corpus: local binary fixtures (PDF/DOCX/HTML) for live ingest tests.
+# Kept out of git (large/licensed); supply locally. .gitkeep preserves the dir.
+tests/data/*
+!tests/data/.gitkeep
