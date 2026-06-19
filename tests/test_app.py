@@ -24,6 +24,14 @@ def test_first_line_truncates_long_line() -> None:
     assert out.endswith("…")
 
 
+def test_first_line_truncates_at_whitespace_boundary() -> None:
+    # Space at the truncation point: rstrip drops it, so result is <= max_len.
+    out = first_line("a " * 100)  # "a a a ..." spaces fall on the cut
+    assert len(out) <= _FIRST_LINE_MAX
+    assert out.endswith("…")
+    assert "  " not in out.rstrip("…")
+
+
 def test_first_line_keeps_short_line_verbatim() -> None:
     assert first_line("short") == "short"
 

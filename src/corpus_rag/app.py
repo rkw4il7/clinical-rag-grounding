@@ -36,7 +36,11 @@ def first_line(content: str, max_len: int = _FIRST_LINE_MAX) -> str:
 
 @st.cache_resource(show_spinner="Loading embedding model + vector store…")
 def _get_pipeline():
-    """Build the query pipeline once per process (embedder + store are heavy)."""
+    """Build the query pipeline once per process (embedder + store are heavy).
+
+    Settings are captured at first call. Restart the Streamlit process to pick up
+    changed EMBED_MODEL_ID, TOP_K, or LLM_* values from the environment / .env.
+    """
     from corpus_rag.document_store import build_document_store
     from corpus_rag.pipelines.query import build_query_pipeline
     from corpus_rag.settings import get_settings
@@ -59,10 +63,15 @@ def main() -> None:
     if not query:
         return
 
-    st.markdown(f"**Query:** {query}")
+    # Render the query as plain text (avoid interpreting Markdown in user input).
+    st.write("**Query:**", query)
 
-    with st.spinner("Retrieving and generating…"):
-        answer, documents = run_query(query, pipeline=_get_pipeline())
+    try:
+        with st.spinner("Retrieving and generating…"):
+            answer, documents = run_query(query, pipeline=_get_pipeline())
+    except Exception as exc:  # noqa: BLE001 — surface any failure in-app, not a traceback
+        st.error(f"Query failed: {exc}")
+        return
 
     st.subheader("Response")
     if answer == ABSTENTION_ANSWER:
