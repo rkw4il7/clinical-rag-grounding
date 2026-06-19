@@ -58,14 +58,18 @@ def test_build_indexing_pipeline_wires_components() -> None:
     assert ("embedder", "writer") in edges
 
 
+# Docling-supported corpus formats we expect under tests/data (spec §7.3).
+_SAMPLE_EXTS = {".pdf", ".docx", ".html", ".htm", ".md", ".pptx", ".csv", ".xlsx"}
+
+
 def _sample_sources() -> list[str]:
     if not _DATA_DIR.is_dir():
         return []
-    # Skip dotfiles (e.g. .gitkeep) — Docling rejects unknown formats.
+    # Allowlist known formats so stray files (.gitkeep, .txt, …) never reach Docling.
     return sorted(
         str(p)
         for p in _DATA_DIR.rglob("*")
-        if p.is_file() and not p.name.startswith(".")
+        if p.is_file() and p.suffix.lower() in _SAMPLE_EXTS
     )
 
 
