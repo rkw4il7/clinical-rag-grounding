@@ -259,8 +259,12 @@ def run_query_reranked(
     if not grounded:
         return ABSTENTION_ANSWER, ranked_sources
 
+    # Ground the answer in the TOP_K reranked chunks only — the whole point of
+    # reranking is to feed the LLM the best few, not all RERANK_CANDIDATES. The
+    # UI still displays every candidate; only the generator's context shrinks.
+    llm_sources = grounded[: settings.top_k]
     prompt = engine.prompt_builder.run(
-        query=query, documents=[rs.document for rs in grounded]
+        query=query, documents=[rs.document for rs in llm_sources]
     )["prompt"]
     replies = engine.generator.run(prompt=prompt).get("replies") or []
     if not replies:

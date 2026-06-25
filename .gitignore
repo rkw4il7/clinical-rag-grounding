@@ -222,3 +222,8 @@ __marimo__/
 # Kept out of git (large/licensed); supply locally. .gitkeep preserves the dir.
 tests/data/*
 !tests/data/.gitkeep
+
+# IntelliJ: track shared project config but not per-user editor/session state.
+.idea/workspace.xml
+.idea/usage.statistics.xml
+.idea/shelf/

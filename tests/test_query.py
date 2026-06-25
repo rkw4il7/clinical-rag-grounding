@@ -159,6 +159,22 @@ def test_rerank_overrides_cosine_order_and_keeps_both_scores() -> None:
     assert [s.cosine_score for s in sources] == [0.7, 0.9, 0.8]
 
 
+def test_rerank_grounds_llm_on_top_k_only_but_returns_all_candidates() -> None:
+    a = Document(content="aaa", score=0.9)
+    b = Document(content="bbb", score=0.8)
+    c = Document(content="ccc", score=0.7)
+    engine = _rerank_engine(
+        [a, b, c], [(c, 0.99), (a, 0.50), (b, 0.10)], reply="from sources"
+    )
+
+    # top_k=2: LLM sees only the top 2 reranked (c, a); UI still gets all 3.
+    _, sources = run_query_reranked("q", engine=engine, settings=_settings(top_k=2))
+
+    assert len(sources) == 3  # all candidates surfaced for display
+    sent = engine.prompt_builder.run.call_args.kwargs["documents"]
+    assert [d.id for d in sent] == [c.id, a.id]  # only top_k, in rerank order
+
+
 def test_rerank_empty_query_abstains_without_running_engine() -> None:
     engine = _rerank_engine([Document(content="a", score=0.9)], [])
     answer, sources = run_query_reranked("  ", engine=engine, settings=_settings())

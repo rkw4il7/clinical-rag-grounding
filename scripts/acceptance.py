@@ -39,7 +39,12 @@ from haystack_integrations.components.converters.docling import (
 from corpus_rag.adapters import discover_all
 from corpus_rag.document_store import EmbeddingDimensionError, build_document_store
 from corpus_rag.embeddings import resolve_embedding_dim
-from corpus_rag.pipelines.query import build_query_pipeline, run_query
+from corpus_rag.pipelines.query import (
+    build_query_pipeline,
+    build_rerank_engine,
+    run_query,
+    run_query_reranked,
+)
 from corpus_rag.prompts import ABSTENTION_ANSWER
 from corpus_rag.settings import get_settings
 
@@ -65,6 +70,7 @@ class Context:
     emitted: dict = field(default_factory=dict)  # id -> Docling-emitted content
     all_docs: dict = field(default_factory=dict)  # id -> stored Document (cached)
     query_pipeline: object = None
+    rerank_engine: object = None
 
 
 # --- checks --------------------------------------------------------------
@@ -212,6 +218,37 @@ def check_a2_verbatim_source(ctx: Context) -> Result:
     return Result("§2A A2 grounded answer + verbatim source", ok, detail)
 
 
+def _rerank_engine(ctx: Context):
+    if ctx.rerank_engine is None:
+        ctx.rerank_engine = build_rerank_engine(ctx.store, ctx.settings)
+    return ctx.rerank_engine
+
+
+def check_8_rerank(ctx: Context) -> Result:
+    """Rerank: min(CANDIDATES,N) sources, both rank/score channels, reorder."""
+    _, sources = run_query_reranked(
+        GROUNDED_QUERY, engine=_rerank_engine(ctx), settings=ctx.settings
+    )
+    expected = min(ctx.settings.rerank_candidates, ctx.store.count_documents())
+    count_ok = len(sources) == expected
+    both_scores = all(
+        s.cosine_score is not None and s.rerank_score is not None for s in sources
+    )
+    contiguous = [s.rerank_rank for s in sources] == list(range(1, len(sources) + 1))
+    rs = [s.rerank_score for s in sources]
+    monotonic = all(a >= b for a, b in zip(rs, rs[1:], strict=False))
+    # Demonstration: did the rerank reorder the cosine list? (Not a hard contract;
+    # informational when the corpus is large enough to expect disagreement.)
+    reordered = [s.cosine_rank for s in sources] != sorted(s.cosine_rank for s in sources)
+    ok = count_ok and both_scores and contiguous and monotonic
+    return Result(
+        "rerank: candidates + both rankings + monotonic",
+        ok,
+        f"n={len(sources)} expected={expected} both_scores={both_scores} "
+        f"monotonic={monotonic} reordered={reordered}",
+    )
+
+
 def check_a3_no_lossy_transform(ctx: Context) -> Result:
     """§2A A3: stored content is byte-identical to Docling-emitted content."""
     if not ctx.emitted:
@@ -231,6 +268,7 @@ CHECKS = [
     check_5_retrieval_count_scores,
     check_6_gui_data_contract,
     check_7_determinism,
+    check_8_rerank,
     check_a1_abstain,
     check_a2_verbatim_source,
     check_a3_no_lossy_transform,
@@ -281,6 +319,9 @@ def write_report(results: list[Result], path: Path) -> None:
         "→ DocumentWriter (OVERWRITE).",
         "- Query pipeline + §2A grounding contract: retrieve → grounding-scoped "
         "prompt → local OpenAI-compatible generator; abstains without grounding.",
+        "- Cross-encoder reranking: retrieve RERANK_CANDIDATES by cosine, reorder "
+        "with a cross-encoder, ground the answer in the top-K reranked chunks; the "
+        "UI shows cosine vs rerank rank/score side by side.",
         "- Streamlit app: query → response → verbatim ranked source expanders.",
         "",
         "## How it was tested",
