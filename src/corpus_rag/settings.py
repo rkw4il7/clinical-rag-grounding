@@ -51,9 +51,18 @@ class Settings(BaseSettings):
     top_k: int = 10
     min_score: float = 0.0  # abstention floor; 0.0 == off (spec §2A.3)
 
+    # Reranking (post-retrieval). Retrieve RERANK_CANDIDATES by cosine, then a
+    # cross-encoder reorders them; the UI shows both rankings side by side to
+    # demonstrate the rerank overriding the initial cosine order.
+    rerank_candidates: int = 20
+    rerank_model_id: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+
     # Local OpenAI-compatible generator endpoint.
     llm_base_url: str = "http://localhost:8080/v1"
     llm_model: str = "local-model"
+    # Generous default: reasoning models emit long thinking traces and can take
+    # well over the OpenAI client's 60s default before the first token.
+    llm_timeout: int = 180
 
     # Corpus origins: JSON array of {adapter, root|url, ...} objects.
     corpus_sources: list[SourceConfig] = Field(default_factory=list)
@@ -66,6 +75,10 @@ class Settings(BaseSettings):
             raise ValueError("EMBEDDING_DIM, when set, must be >= 1")
         if not 0.0 <= self.min_score <= 1.0:
             raise ValueError("MIN_SCORE must be in [0.0, 1.0] (cosine floor)")
+        if self.rerank_candidates < 1:
+            raise ValueError("RERANK_CANDIDATES must be >= 1")
+        if self.llm_timeout < 1:
+            raise ValueError("LLM_TIMEOUT must be >= 1 (seconds)")
         return self
 
 

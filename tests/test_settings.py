@@ -90,3 +90,15 @@ def test_invalid_min_score_rejected(clean_env, bad: str) -> None:
     clean_env.setenv("MIN_SCORE", bad)
     with pytest.raises(ValueError, match="MIN_SCORE"):
         _settings()
+
+
+def test_rerank_defaults(clean_env) -> None:
+    s = _settings()
+    assert s.rerank_candidates == 20
+    assert s.rerank_model_id == "cross-encoder/ms-marco-MiniLM-L-6-v2"
+
+
+def test_invalid_rerank_candidates_rejected(clean_env) -> None:
+    clean_env.setenv("RERANK_CANDIDATES", "0")
+    with pytest.raises(ValueError, match="RERANK_CANDIDATES"):
+        _settings()

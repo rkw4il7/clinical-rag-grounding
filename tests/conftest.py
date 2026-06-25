@@ -11,8 +11,11 @@ _SETTINGS_ENV_VARS = (
     "EMBEDDING_DIM",
     "TOP_K",
     "MIN_SCORE",
+    "RERANK_CANDIDATES",
+    "RERANK_MODEL_ID",
     "LLM_BASE_URL",
     "LLM_MODEL",
+    "LLM_TIMEOUT",
     "CORPUS_SOURCES",
 )
 
