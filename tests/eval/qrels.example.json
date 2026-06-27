@@ -1,21 +1,20 @@
 [
   {
-    "query": "Which oral antibiotic is recommended as the first-line treatment for pneumonia in adults?",
+    "query": "What is the single most effective routine measure for reducing pathogen transmission between patients and staff?",
     "relevant": [
-      {"contains": "first-line"},
-      {"contains": "pneumonia"}
+      {"contains": "hand hygiene"}
     ]
   },
   {
-    "query": "What is the recommended INR target range for warfarin therapy?",
+    "query": "When hands are not visibly soiled, what hand-cleaning method is commonly used?",
     "relevant": [
-      {"contains": "INR"}
+      {"contains": "alcohol-based hand rub"}
     ]
   },
   {
-    "query": "When should antibiotics be escalated for a non-responding infection?",
+    "query": "What is the general resting adult heart rate reference range?",
     "relevant": [
-      {"source": "guideline", "contains": "escalat"}
+      {"contains": "beats per minute"}
     ]
   }
 ]
