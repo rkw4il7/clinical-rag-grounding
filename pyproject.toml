@@ -28,6 +28,7 @@ corpus-rag = "corpus_rag.cli:app"
 [dependency-groups]
 dev = [
     "pytest>=8.3,<9.0",
+    "reportlab>=5.0.0",
     "ruff>=0.8,<1.0",
 ]
 

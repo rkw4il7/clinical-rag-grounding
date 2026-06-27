@@ -71,6 +71,21 @@ Put your documents where `CORPUS_SOURCES` points (PDF, DOCX, HTML, …), then:
 uv run corpus-rag ingest          # add --reset to recreate the table
 ```
 
+A tiny **synthetic sample** ships in the repo at
+`./tests/data/sample-clinical-guideline.pdf` so a fresh clone always has
+something to ingest, chunk, and process — no need to supply your own corpus to
+see the pipeline work end to end. It is generated, non-PHI, common-knowledge
+reference text (two headed sections); regenerate it with
+`uv run python scripts/make_sample_pdf.py`. Real or licensed corpora are
+gitignored — drop them in `./tests/data/` and they'll be picked up too.
+
+With the default `.env` (below) `CORPUS_SOURCES` already points at
+`tests/data/**/*`, so out of the box `uv run corpus-rag ingest` indexes that
+sample. To make `.env` work you only need: a reachable `PG_CONN_STR`
+(Postgres + pgvector), and `LLM_BASE_URL` / `LLM_MODEL` pointing at a running
+local OpenAI-compatible server. The embedding model (`EMBED_MODEL_ID`) downloads
+automatically on first run.
+
 ### 5. Run the app
 ```bash
 uv run streamlit run src/corpus_rag/app.py

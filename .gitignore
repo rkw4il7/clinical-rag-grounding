@@ -219,9 +219,12 @@ __marimo__/
 .zenflow/
 
 # Sample corpus: local binary fixtures (PDF/DOCX/HTML) for live ingest tests.
-# Kept out of git (large/licensed); supply locally. .gitkeep preserves the dir.
+# Real/large/licensed corpora stay out of git (supply locally). The small
+# committed synthetic sample is the exception so a fresh clone always has
+# something to ingest, chunk, and process.
 tests/data/*
 !tests/data/.gitkeep
+!tests/data/sample-clinical-guideline.pdf
 
 # IntelliJ: track shared project config but not per-user editor/session state.
 .idea/workspace.xml
