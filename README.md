@@ -13,12 +13,20 @@ This app never shows a generated answer by itself. Every answer is displayed
 was stored in the database and retrieved for the question. Nothing is paraphrased,
 summarized, or re-written between storage and display.
 
-In plain terms:
+In plain terms (and stated precisely — this is a narrow, specific guarantee, not
+a claim that the model is sealed off from all general knowledge):
 
-- The model may **only** use the retrieved source passages to make specific
-  clinical claims. It is told, in the prompt, never to use clinical facts from its
-  own training. If the sources don't support an answer, it says so instead of
-  guessing.
+- **Specific clinical claims must come from the retrieved passages.** Any fact,
+  value, dose, threshold, drug name, or recommendation has to trace to a chunk.
+  The prompt forbids sourcing *specific* clinical facts from the model's training.
+  General, non-specific reasoning (common definitions, plain-language connective
+  text) may still be used to phrase the answer — so this is not a claim that the
+  model uses *zero* non-corpus knowledge.
+- **No grounding → an error/abstention, never a fallback.** If retrieval finds no
+  chunk meeting the similarity threshold, the app returns a fixed abstention
+  message ("Insufficient grounding in the corpus to answer.") and shows the
+  (possibly empty) source list. It does **not** fall back to the summarizing
+  model's own healthcare knowledge to manufacture an answer.
 - The passages you read in the "Sources" panel are **byte-for-byte identical** to
   what's in the database. What you see is the ground truth, not a retelling of it.
 - The answer can be worded differently each time (language models vary), but the
