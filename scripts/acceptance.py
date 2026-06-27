@@ -40,7 +40,7 @@ from corpus_rag.document_store import EmbeddingDimensionError, build_document_st
 from corpus_rag.embeddings import resolve_embedding_dim
 from corpus_rag.pipelines.indexing import build_chunker
 from corpus_rag.pipelines.query import (
-    build_query_pipeline,
+    build_query_engine,
     build_rerank_engine,
     run_query,
     run_query_reranked,
@@ -70,7 +70,7 @@ class Context:
     store: object = None
     emitted: dict = field(default_factory=dict)  # id -> Docling-emitted content
     all_docs: dict = field(default_factory=dict)  # id -> stored Document (cached)
-    query_pipeline: object = None
+    query_engine: object = None
     rerank_engine: object = None
     grounded_query_override: str | None = None  # from --grounded-query
     generate_fn: object = None  # lazy single-shot LLM call
@@ -159,10 +159,10 @@ def check_4_idempotent_reingest(ctx: Context) -> Result:
     return Result("§7.4 re-ingest idempotent (OVERWRITE)", before == after, f"{before} -> {after}")
 
 
-def _query_pipeline(ctx: Context):
-    if ctx.query_pipeline is None:
-        ctx.query_pipeline = build_query_pipeline(ctx.store, ctx.settings)
-    return ctx.query_pipeline
+def _query_engine(ctx: Context):
+    if ctx.query_engine is None:
+        ctx.query_engine = build_query_engine(ctx.store, ctx.settings)
+    return ctx.query_engine
 
 
 def _generate_fn(ctx: Context):
@@ -227,7 +227,7 @@ def check_5_retrieval_count_scores(ctx: Context) -> Result:
             f"SKIPPED: MIN_SCORE={ctx.settings.min_score} post-filters docs",
         )
     q = _grounded_query(ctx)
-    _, docs = run_query(q, pipeline=_query_pipeline(ctx), settings=ctx.settings)
+    _, docs = run_query(q, engine=_query_engine(ctx), settings=ctx.settings)
     expected = min(ctx.settings.top_k, ctx.store.count_documents())
     scores = [d.score for d in docs]
     monotonic = all(a >= b for a, b in zip(scores, scores[1:], strict=False))
@@ -239,7 +239,7 @@ def check_5_retrieval_count_scores(ctx: Context) -> Result:
 def check_6_gui_data_contract(ctx: Context) -> Result:
     """§7.6: grounded query yields a non-empty response + ranked source list."""
     q = _grounded_query(ctx)
-    answer, docs = run_query(q, pipeline=_query_pipeline(ctx), settings=ctx.settings)
+    answer, docs = run_query(q, engine=_query_engine(ctx), settings=ctx.settings)
     first = docs[0].content.strip().splitlines()[0] if docs else ""
     ok = answer != ABSTENTION_ANSWER and bool(answer.strip()) and len(docs) >= 1 and bool(first)
     detail = f"abstain={answer == ABSTENTION_ANSWER} ndocs={len(docs)}"
@@ -248,8 +248,8 @@ def check_6_gui_data_contract(ctx: Context) -> Result:
 
 def check_7_determinism(ctx: Context) -> Result:
     """§7.7: same query + corpus yields a stable retrieval order."""
-    _, a = run_query(_grounded_query(ctx), pipeline=_query_pipeline(ctx), settings=ctx.settings)
-    _, b = run_query(_grounded_query(ctx), pipeline=_query_pipeline(ctx), settings=ctx.settings)
+    _, a = run_query(_grounded_query(ctx), engine=_query_engine(ctx), settings=ctx.settings)
+    _, b = run_query(_grounded_query(ctx), engine=_query_engine(ctx), settings=ctx.settings)
     ok = [d.id for d in a] == [d.id for d in b]
     return Result("§7.7 deterministic retrieval order", ok, f"ids_match={ok}")
 
@@ -257,7 +257,7 @@ def check_7_determinism(ctx: Context) -> Result:
 def check_a1_abstain(ctx: Context) -> Result:
     """§2A A1: no grounding above the floor -> abstain."""
     strict = ctx.settings.model_copy(update={"min_score": 0.999})
-    answer, _ = run_query(NONSENSE_QUERY, pipeline=_query_pipeline(ctx), settings=strict)
+    answer, _ = run_query(NONSENSE_QUERY, engine=_query_engine(ctx), settings=strict)
     ok = answer == ABSTENTION_ANSWER
     return Result("§2A A1 no-match abstains", ok, f"answer={answer[:48]!r}")
 
@@ -273,7 +273,7 @@ def check_a2_verbatim_source(ctx: Context) -> Result:
             "ctx.all_docs not populated (check_4 failed upstream)",
         )
     q = _grounded_query(ctx)
-    answer, docs = run_query(q, pipeline=_query_pipeline(ctx), settings=ctx.settings)
+    answer, docs = run_query(q, engine=_query_engine(ctx), settings=ctx.settings)
     stored = ctx.all_docs  # cached after check_4
     stored_content = stored[docs[0].id].content if docs and docs[0].id in stored else None
     byte_equal = bool(docs) and docs[0].content == stored_content
@@ -410,8 +410,9 @@ def write_report(results: list[Result], path: Path) -> None:
         "- **Chunk vs embedding length:** some HybridChunker chunks exceed the "
         "bge-base 512-token limit; the embedder truncates (provenance text is "
         "fuller than the embedded span).",
-        "- **Generator runs before the MIN_SCORE gate** (MVP trade-off): a "
-        "sub-floor query still invokes the LLM, whose reply is then discarded.",
+        "- **Gate before generate:** the query path embeds, retrieves, applies "
+        "the MIN_SCORE grounding gate, and only invokes the LLM once grounding "
+        "exists — generation never precedes grounding.",
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")

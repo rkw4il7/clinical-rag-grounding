@@ -1,15 +1,17 @@
-"""Query pipeline: query -> retrieve -> grounded generation (root ``spec.md`` §3.3).
+"""Query path: embed -> retrieve -> GATE -> generate (root ``spec.md`` §3.3, §2A).
 
     SentenceTransformersTextEmbedder(EMBED_MODEL_ID)
       -> PgvectorEmbeddingRetriever(top_k=TOP_K)
+      -> [§2A grounding gate: MIN_SCORE floor; abstain if nothing qualifies]
       -> PromptBuilder(RAG_PROMPT_TEMPLATE)
       -> OpenAIGenerator(local base_url, temperature=0)
 
-``run_query`` returns BOTH the generated answer and the retriever's documents in
-cosine-ranked order (root §4.3). It enforces the §2A grounding contract: when the
-retriever returns nothing (or nothing at/above ``MIN_SCORE``), it returns the
-abstention answer and discards any generated prose — but still surfaces the
-(possibly empty) document list so the UI always shows what grounding existed.
+``run_query`` drives the components STEP BY STEP and applies the grounding gate
+BEFORE invoking the generator: the LLM is never called until retrieval has
+established grounding (no chunk at/above ``MIN_SCORE`` → abstain, generator not
+invoked). This is the healthcare-safety ordering — generation never precedes
+grounding. It returns ``(answer, documents)`` with documents in cosine-ranked
+order, always surfaced (even on abstention) so the UI shows what grounding existed.
 """
 
 from __future__ import annotations
@@ -19,7 +21,6 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
-from haystack import Pipeline
 from haystack.components.builders import PromptBuilder
 from haystack.components.embedders import SentenceTransformersTextEmbedder
 from haystack.components.generators import OpenAIGenerator
@@ -39,23 +40,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def build_query_pipeline(
-    document_store: PgvectorDocumentStore,
-    settings: Settings | None = None,
-) -> Pipeline:
-    """Construct the text-embed -> retrieve -> prompt -> generate pipeline."""
-    settings = settings or get_settings()
-
-    text_embedder = SentenceTransformersTextEmbedder(model=settings.embed_model_id)
-    retriever = PgvectorEmbeddingRetriever(
-        document_store=document_store,
-        top_k=settings.top_k,
-    )
-    prompt_builder = PromptBuilder(
-        template=RAG_PROMPT_TEMPLATE,
-        required_variables=["query", "documents"],
-    )
-    generator = OpenAIGenerator(
+def _build_generator(settings: Settings) -> OpenAIGenerator:
+    return OpenAIGenerator(
         # Local OpenAI-compatible servers ignore the key but the client requires
         # a non-empty value; never read a real OPENAI_API_KEY from the env.
         api_key=Secret.from_token("not-needed-for-local-server"),
@@ -65,70 +51,90 @@ def build_query_pipeline(
         timeout=settings.llm_timeout,
     )
 
-    pipeline = Pipeline()
-    pipeline.add_component("text_embedder", text_embedder)
-    pipeline.add_component("retriever", retriever)
-    pipeline.add_component("prompt_builder", prompt_builder)
-    pipeline.add_component("generator", generator)
 
-    pipeline.connect("text_embedder.embedding", "retriever.query_embedding")
-    pipeline.connect("retriever.documents", "prompt_builder.documents")
-    pipeline.connect("prompt_builder.prompt", "generator.prompt")
-    # No explicit warm_up: Pipeline.run() warms its components on first call, so
-    # the first run_query incurs the model cold-start (unlike build_rerank_engine,
-    # which warms eagerly because it drives components directly, not via a Pipeline).
-    return pipeline
+@dataclass
+class QueryEngine:
+    """Warmed components for the gate-before-generate query path (built once)."""
+
+    text_embedder: SentenceTransformersTextEmbedder
+    retriever: PgvectorEmbeddingRetriever
+    prompt_builder: PromptBuilder
+    generator: OpenAIGenerator
+
+
+def build_query_engine(
+    document_store: PgvectorDocumentStore,
+    settings: Settings | None = None,
+) -> QueryEngine:
+    """Build + warm the embed → retrieve → gate → generate components.
+
+    Components are driven directly (not via a Haystack ``Pipeline``) so the
+    §2A grounding gate can run between retrieval and generation — the generator
+    is only invoked once grounding is established.
+    """
+    settings = settings or get_settings()
+
+    text_embedder = SentenceTransformersTextEmbedder(model=settings.embed_model_id)
+    text_embedder.warm_up()
+    retriever = PgvectorEmbeddingRetriever(
+        document_store=document_store,
+        top_k=settings.top_k,
+    )
+    prompt_builder = PromptBuilder(
+        template=RAG_PROMPT_TEMPLATE,
+        required_variables=["query", "documents"],
+    )
+    return QueryEngine(text_embedder, retriever, prompt_builder, _build_generator(settings))
 
 
 @lru_cache(maxsize=1)
-def _default_pipeline() -> Pipeline:
-    """Process-wide query pipeline (built once; loads the embedder + store)."""
+def _default_query_engine() -> QueryEngine:
+    """Process-wide query engine (built once; loads the embedder + store)."""
     from corpus_rag.document_store import build_document_store
 
     settings = get_settings()
-    return build_query_pipeline(build_document_store(settings), settings)
+    return build_query_engine(build_document_store(settings), settings)
 
 
 def run_query(
     query: str,
     *,
-    pipeline: Pipeline | None = None,
+    engine: QueryEngine | None = None,
     settings: Settings | None = None,
 ) -> tuple[str, list[Document]]:
-    """Run a grounded query (root §4.3, §2A).
+    """Run a grounded query, gating BEFORE generation (root §4.3, §2A).
+
+    Order: embed → retrieve → apply the ``MIN_SCORE`` grounding gate → abstain if
+    nothing qualifies (the generator is NOT called) → otherwise build the prompt
+    and generate. This guarantees the LLM never runs without established grounding.
 
     :param query: The user's question.
-    :param pipeline: Override pipeline (defaults to the cached process pipeline).
+    :param engine: Override engine (defaults to the cached process engine).
     :param settings: Override settings (defaults to cached process settings).
     :returns: ``(answer, documents)`` — documents in cosine-ranked order, always
         returned even on abstention.
     """
     settings = settings or get_settings()
-    pipeline = pipeline or _default_pipeline()
+    engine = engine or _default_query_engine()
 
     # Empty/whitespace query → undefined embedding behavior; abstain immediately.
     if not query.strip():
         return ABSTENTION_ANSWER, []
 
-    # NOTE: the generator runs unconditionally as part of pipeline.run — even when
-    # the MIN_SCORE gate below will abstain and discard its reply. Acceptable for
-    # this MVP slice; a retriever-only pre-pass would avoid the wasted LLM call.
-    result = pipeline.run(
-        {"text_embedder": {"text": query}, "prompt_builder": {"query": query}},
-        include_outputs_from={"retriever"},
-    )
-
-    documents: list[Document] = result["retriever"]["documents"]
+    embedding = engine.text_embedder.run(text=query)["embedding"]
+    documents: list[Document] = engine.retriever.run(query_embedding=embedding)["documents"]
 
     # Grounding gate (§2A.3): drop chunks below the MIN_SCORE floor; abstain when
-    # nothing remains, discarding any generated prose to avoid contamination.
+    # nothing remains — BEFORE the generator runs, so no ungrounded prose is ever
+    # produced (not merely discarded).
     if settings.min_score > 0.0:
         documents = [d for d in documents if (d.score or 0.0) >= settings.min_score]
 
     if not documents:
         return ABSTENTION_ANSWER, documents
 
-    replies = result.get("generator", {}).get("replies") or []
+    prompt = engine.prompt_builder.run(query=query, documents=documents)["prompt"]
+    replies = engine.generator.run(prompt=prompt).get("replies") or []
     if not replies:
         # Distinct from a grounding abstention: the LLM produced nothing (network
         # error, context overflow, refusal). Same return, but make it detectable.
@@ -189,14 +195,9 @@ def build_rerank_engine(
         template=RAG_PROMPT_TEMPLATE,
         required_variables=["query", "documents"],
     )
-    generator = OpenAIGenerator(
-        api_key=Secret.from_token("not-needed-for-local-server"),
-        model=settings.llm_model,
-        api_base_url=settings.llm_base_url,
-        generation_kwargs={"temperature": 0},
-        timeout=settings.llm_timeout,
+    return RerankEngine(
+        text_embedder, retriever, ranker, prompt_builder, _build_generator(settings)
     )
-    return RerankEngine(text_embedder, retriever, ranker, prompt_builder, generator)
 
 
 @lru_cache(maxsize=1)
@@ -232,9 +233,7 @@ def run_query_reranked(
     cosine_docs = engine.retriever.run(query_embedding=embedding)["documents"]
 
     # Snapshot cosine rank+score NOW; the ranker overwrites Document.score.
-    cosine_by_id = {
-        doc.id: (rank, doc.score) for rank, doc in enumerate(cosine_docs, start=1)
-    }
+    cosine_by_id = {doc.id: (rank, doc.score) for rank, doc in enumerate(cosine_docs, start=1)}
 
     reranked_docs = engine.ranker.run(query=query, documents=cosine_docs)["documents"]
 
@@ -263,9 +262,9 @@ def run_query_reranked(
     # reranking is to feed the LLM the best few, not all RERANK_CANDIDATES. The
     # UI still displays every candidate; only the generator's context shrinks.
     llm_sources = grounded[: settings.top_k]
-    prompt = engine.prompt_builder.run(
-        query=query, documents=[rs.document for rs in llm_sources]
-    )["prompt"]
+    prompt = engine.prompt_builder.run(query=query, documents=[rs.document for rs in llm_sources])[
+        "prompt"
+    ]
     replies = engine.generator.run(prompt=prompt).get("replies") or []
     if not replies:
         logger.warning("Generator returned no replies for query %r", query)

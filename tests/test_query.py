@@ -25,13 +25,14 @@ def _settings(**overrides) -> Settings:
     return Settings(_env_file=None, **base)
 
 
-def _mock_pipeline(documents: list[Document], reply: str = "grounded answer"):
-    pipeline = MagicMock()
-    pipeline.run.return_value = {
-        "retriever": {"documents": documents},
-        "generator": {"replies": [reply]},
-    }
-    return pipeline
+def _mock_engine(documents: list[Document], reply: str = "grounded answer"):
+    """Fake QueryEngine driving embed -> retrieve -> gate -> generate stepwise."""
+    engine = MagicMock()
+    engine.text_embedder.run.return_value = {"embedding": [0.0, 0.1, 0.2]}
+    engine.retriever.run.return_value = {"documents": documents}
+    engine.prompt_builder.run.return_value = {"prompt": "PROMPT"}
+    engine.generator.run.return_value = {"replies": [reply]}
+    return engine
 
 
 # --- prompt template -----------------------------------------------------
@@ -52,60 +53,65 @@ def test_prompt_template_enforces_grounding() -> None:
 
 def test_run_query_returns_answer_and_ranked_docs() -> None:
     docs = [Document(content="a", score=0.9), Document(content="b", score=0.5)]
-    pipeline = _mock_pipeline(docs, reply="from sources")
+    engine = _mock_engine(docs, reply="from sources")
 
-    answer, returned = run_query("q", pipeline=pipeline, settings=_settings())
+    answer, returned = run_query("q", engine=engine, settings=_settings())
 
     assert answer == "from sources"
     assert returned == docs  # order preserved, no re-sort
 
 
 @pytest.mark.parametrize("q", ["", "   ", "\n\t"])
-def test_run_query_empty_query_abstains_without_running_pipeline(q: str) -> None:
-    pipeline = _mock_pipeline([Document(content="a", score=0.9)])
+def test_run_query_empty_query_abstains_without_running_engine(q: str) -> None:
+    engine = _mock_engine([Document(content="a", score=0.9)])
 
-    answer, returned = run_query(q, pipeline=pipeline, settings=_settings())
-
-    assert answer == ABSTENTION_ANSWER
-    assert returned == []
-    pipeline.run.assert_not_called()
-
-
-def test_run_query_abstains_on_empty_retrieval() -> None:
-    pipeline = _mock_pipeline([], reply="should be discarded")
-
-    answer, returned = run_query("q", pipeline=pipeline, settings=_settings())
+    answer, returned = run_query(q, engine=engine, settings=_settings())
 
     assert answer == ABSTENTION_ANSWER
     assert returned == []
+    engine.text_embedder.run.assert_not_called()
 
 
-def test_run_query_min_score_filters_then_abstains() -> None:
+def test_run_query_abstains_on_empty_retrieval_without_generating() -> None:
+    engine = _mock_engine([], reply="should never be produced")
+
+    answer, returned = run_query("q", engine=engine, settings=_settings())
+
+    assert answer == ABSTENTION_ANSWER
+    assert returned == []
+    # Gate-before-generate: the LLM is never called without grounding.
+    engine.generator.run.assert_not_called()
+
+
+def test_run_query_min_score_filters_then_abstains_without_generating() -> None:
     docs = [Document(content="a", score=0.2), Document(content="b", score=0.1)]
-    pipeline = _mock_pipeline(docs, reply="should be discarded")
+    engine = _mock_engine(docs, reply="should never be produced")
 
-    answer, returned = run_query("q", pipeline=pipeline, settings=_settings(min_score=0.5))
+    answer, returned = run_query("q", engine=engine, settings=_settings(min_score=0.5))
 
     assert answer == ABSTENTION_ANSWER
     assert returned == []
+    # Sub-floor grounding → abstain BEFORE generation, not discard after.
+    engine.generator.run.assert_not_called()
 
 
 def test_run_query_min_score_keeps_grounded_docs() -> None:
     docs = [Document(content="a", score=0.9), Document(content="b", score=0.1)]
-    pipeline = _mock_pipeline(docs, reply="grounded")
+    engine = _mock_engine(docs, reply="grounded")
 
-    answer, returned = run_query("q", pipeline=pipeline, settings=_settings(min_score=0.5))
+    answer, returned = run_query("q", engine=engine, settings=_settings(min_score=0.5))
 
     assert answer == "grounded"
     assert [d.content for d in returned] == ["a"]
+    engine.generator.run.assert_called_once()
 
 
 def test_run_query_abstains_when_generator_empty() -> None:
     docs = [Document(content="a", score=0.9)]
-    pipeline = MagicMock()
-    pipeline.run.return_value = {"retriever": {"documents": docs}, "generator": {"replies": []}}
+    engine = _mock_engine(docs)
+    engine.generator.run.return_value = {"replies": []}
 
-    answer, returned = run_query("q", pipeline=pipeline, settings=_settings())
+    answer, returned = run_query("q", engine=engine, settings=_settings())
 
     assert answer == ABSTENTION_ANSWER
     assert returned == docs
@@ -203,16 +209,16 @@ def test_rerank_min_score_gate_abstains_but_still_returns_sources() -> None:
 # --- live ----------------------------------------------------------------
 
 
-def _live_pipeline_and_store():
+def _live_engine_and_store():
     from corpus_rag.document_store import build_document_store
-    from corpus_rag.pipelines.query import build_query_pipeline
+    from corpus_rag.pipelines.query import build_query_engine
     from corpus_rag.settings import get_settings
 
     settings = get_settings()
     store = build_document_store(settings)
     if store.count_documents() == 0:
         pytest.skip("Empty corpus; ingest a sample corpus first (live).")
-    return build_query_pipeline(store, settings), store, settings
+    return build_query_engine(store, settings), store, settings
 
 
 def _corpus_answerable_query(store, settings) -> str:
@@ -250,10 +256,10 @@ def _corpus_answerable_query(store, settings) -> str:
 @pytest.mark.live
 def test_live_retrieval_count_and_ordering() -> None:
     """§7.5: min(TOP_K, N) docs returned with non-increasing scores."""
-    pipeline, store, settings = _live_pipeline_and_store()
+    engine, store, settings = _live_engine_and_store()
     if settings.min_score > 0.0:
         pytest.skip("MIN_SCORE>0 post-filters docs; count assertion not applicable.")
-    _, docs = run_query("What does the guideline recommend?", pipeline=pipeline, settings=settings)
+    _, docs = run_query("What does the guideline recommend?", engine=engine, settings=settings)
 
     expected = min(settings.top_k, store.count_documents())
     assert len(docs) == expected
@@ -264,10 +270,10 @@ def test_live_retrieval_count_and_ordering() -> None:
 @pytest.mark.live
 def test_live_retrieval_order_is_deterministic() -> None:
     """§7.7: same query + corpus yields a stable retrieval order."""
-    pipeline, _, settings = _live_pipeline_and_store()
+    engine, _, settings = _live_engine_and_store()
     q = "What does the guideline recommend?"
-    _, first = run_query(q, pipeline=pipeline, settings=settings)
-    _, second = run_query(q, pipeline=pipeline, settings=settings)
+    _, first = run_query(q, engine=engine, settings=settings)
+    _, second = run_query(q, engine=engine, settings=settings)
 
     assert [d.id for d in first] == [d.id for d in second]
 
@@ -275,9 +281,9 @@ def test_live_retrieval_order_is_deterministic() -> None:
 @pytest.mark.live
 def test_live_a2_non_abstain_answer_has_verbatim_source() -> None:
     """§2A A2: a grounded answer is accompanied by >=1 verbatim source chunk."""
-    pipeline, store, settings = _live_pipeline_and_store()
+    engine, store, settings = _live_engine_and_store()
     query = _corpus_answerable_query(store, settings)
-    answer, docs = run_query(query, pipeline=pipeline, settings=settings)
+    answer, docs = run_query(query, engine=engine, settings=settings)
 
     assert answer != ABSTENTION_ANSWER
     assert len(docs) >= 1
@@ -290,10 +296,10 @@ def test_live_a2_non_abstain_answer_has_verbatim_source() -> None:
 @pytest.mark.live
 def test_live_a1_no_match_abstains() -> None:
     """§2A A1: with no grounding above the floor, abstain (no parametric claim)."""
-    pipeline, _, settings = _live_pipeline_and_store()
+    engine, _, settings = _live_engine_and_store()
     # Force the no-grounding path via a high MIN_SCORE floor.
     strict = settings.model_copy(update={"min_score": 0.999})
-    answer, _ = run_query("zzzz unrelated nonsense qqqq", pipeline=pipeline, settings=strict)
+    answer, _ = run_query("zzzz unrelated nonsense qqqq", engine=engine, settings=strict)
 
     assert answer == ABSTENTION_ANSWER
 
