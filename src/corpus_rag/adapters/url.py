@@ -36,9 +36,7 @@ class UrlAdapter:
                 data = resp.read()
                 mime_type = resp.headers.get_content_type()
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            raise RuntimeError(
-                f"url adapter failed to fetch {self.url!r}: {exc}"
-            ) from exc
+            raise RuntimeError(f"url adapter failed to fetch {self.url!r}: {exc}") from exc
         stream = ByteStream(
             data=data,
             mime_type=mime_type,

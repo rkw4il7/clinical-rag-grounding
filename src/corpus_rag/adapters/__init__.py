@@ -30,9 +30,7 @@ def build_adapter(config: SourceConfig) -> SourceAdapter:
     builder = _REGISTRY.get(config.adapter)
     if builder is None:
         known = ", ".join(sorted(_REGISTRY)) or "(none)"
-        raise ValueError(
-            f"Unknown source adapter {config.adapter!r}; known adapters: {known}"
-        )
+        raise ValueError(f"Unknown source adapter {config.adapter!r}; known adapters: {known}")
     return builder(config)
 
 

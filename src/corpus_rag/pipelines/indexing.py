@@ -33,15 +33,30 @@ if TYPE_CHECKING:
     from haystack.document_stores.types import DocumentStore
 
 
-def build_chunker(model_id: str) -> HybridChunker:
-    """Build a HybridChunker whose tokenizer matches the embedding model.
+def embedding_max_tokens(model_id: str) -> int:
+    """The embedding model's max input tokens (from its tokenizer config)."""
+    return HuggingFaceTokenizer.from_pretrained(model_name=model_id).get_max_tokens()
 
-    Passes an explicit ``HuggingFaceTokenizer`` (not the bare model-id string,
-    which newer docling deprecates). ``from_pretrained`` derives ``max_tokens``
-    from the model's config, so chunk boundaries are identical to the previous
-    string form — re-ingest idempotency is preserved.
+
+def chunk_token_budget(model_id: str, token_margin: int) -> int:
+    """Hard per-chunk token budget: embedding max tokens minus the safety margin."""
+    return max(1, embedding_max_tokens(model_id) - token_margin)
+
+
+def build_chunker(model_id: str, *, token_margin: int = 16) -> HybridChunker:
+    """Build a HybridChunker capped to the embedding model's token budget.
+
+    The chunker's tokenizer ``max_tokens`` is set to ``embedding_max_tokens -
+    token_margin`` so no emitted chunk exceeds what the embedder can encode — the
+    embedder would otherwise silently truncate the tail, making the embedding
+    represent only the start of a chunk whose full text is still displayed/stored.
+    The margin leaves room for the embedder's special tokens plus headroom.
+
+    Passing an explicit ``HuggingFaceTokenizer`` (not the bare model-id string)
+    also avoids docling's deprecation of the string form.
     """
-    tokenizer = HuggingFaceTokenizer.from_pretrained(model_name=model_id)
+    budget = chunk_token_budget(model_id, token_margin)
+    tokenizer = HuggingFaceTokenizer.from_pretrained(model_name=model_id, max_tokens=budget)
     return HybridChunker(tokenizer=tokenizer)
 
 
@@ -60,7 +75,7 @@ def build_indexing_pipeline(
 
     converter = DoclingConverter(
         export_type=ExportType.DOC_CHUNKS,
-        chunker=build_chunker(settings.embed_model_id),
+        chunker=build_chunker(settings.embed_model_id, token_margin=settings.chunk_token_margin),
     )
     embedder = SentenceTransformersDocumentEmbedder(model=settings.embed_model_id)
     writer = DocumentWriter(

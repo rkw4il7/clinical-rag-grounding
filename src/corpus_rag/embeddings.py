@@ -30,7 +30,5 @@ def resolve_embedding_dim(model_id: str) -> int:
     model = SentenceTransformer(model_id)
     dim = model.get_sentence_embedding_dimension()
     if not dim or dim < 1:
-        raise RuntimeError(
-            f"Embedding model {model_id!r} reported an invalid dimension: {dim!r}"
-        )
+        raise RuntimeError(f"Embedding model {model_id!r} reported an invalid dimension: {dim!r}")
     return int(dim)

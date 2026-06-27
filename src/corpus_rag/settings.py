@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     top_k: int = 10
     min_score: float = 0.0  # abstention floor; 0.0 == off (spec §2A.3)
 
+    # Chunking: cap each chunk to the embedding model's max tokens MINUS this
+    # margin, so no chunk is silently truncated at embed time (the margin leaves
+    # room for the embedder's special tokens + a little headroom).
+    chunk_token_margin: int = 16
+
     # Reranking (post-retrieval). Retrieve RERANK_CANDIDATES by cosine, then a
     # cross-encoder reorders them; the UI shows both rankings side by side to
     # demonstrate the rerank overriding the initial cosine order.
@@ -75,6 +80,8 @@ class Settings(BaseSettings):
             raise ValueError("EMBEDDING_DIM, when set, must be >= 1")
         if not 0.0 <= self.min_score <= 1.0:
             raise ValueError("MIN_SCORE must be in [0.0, 1.0] (cosine floor)")
+        if self.chunk_token_margin < 0:
+            raise ValueError("CHUNK_TOKEN_MARGIN must be >= 0")
         if self.rerank_candidates < 1:
             raise ValueError("RERANK_CANDIDATES must be >= 1")
         if self.llm_timeout < 1:

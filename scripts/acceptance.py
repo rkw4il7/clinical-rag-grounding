@@ -119,7 +119,9 @@ def check_3_ingest(ctx: Context) -> Result:
     # Single Docling pass: convert once, capture emitted content for A3.
     converter = DoclingConverter(
         export_type=ExportType.DOC_CHUNKS,
-        chunker=build_chunker(ctx.settings.embed_model_id),
+        chunker=build_chunker(
+            ctx.settings.embed_model_id, token_margin=ctx.settings.chunk_token_margin
+        ),
     )
     emitted_docs = converter.run(sources=sources)["documents"]
     embedder = SentenceTransformersDocumentEmbedder(model=ctx.settings.embed_model_id)
@@ -407,9 +409,9 @@ def write_report(results: list[Result], path: Path) -> None:
         "committed synthetic sample set; drop more files in tests/data/ to extend.",
         "- **OCR latency:** Docling runs RapidOCR on the PDF (text-layer present, "
         "OCR returns empty) making ingest slow (~minutes).",
-        "- **Chunk vs embedding length:** some HybridChunker chunks exceed the "
-        "bge-base 512-token limit; the embedder truncates (provenance text is "
-        "fuller than the embedded span).",
+        "- **Chunk token budget:** the chunker is capped to the embedding model's "
+        "max tokens minus CHUNK_TOKEN_MARGIN, so no chunk is silently truncated at "
+        "embed time (the embedding represents the whole stored/displayed chunk).",
         "- **Gate before generate:** the query path embeds, retrieves, applies "
         "the MIN_SCORE grounding gate, and only invokes the LLM once grounding "
         "exists — generation never precedes grounding.",

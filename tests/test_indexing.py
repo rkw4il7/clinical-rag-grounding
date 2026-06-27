@@ -69,9 +69,7 @@ def _sample_sources() -> list[str]:
         return []
     # Allowlist known formats so stray files (.gitkeep, .txt, …) never reach Docling.
     return sorted(
-        str(p)
-        for p in _DATA_DIR.rglob("*")
-        if p.is_file() and p.suffix.lower() in _SAMPLE_EXTS
+        str(p) for p in _DATA_DIR.rglob("*") if p.is_file() and p.suffix.lower() in _SAMPLE_EXTS
     )
 
 
@@ -120,3 +118,39 @@ def test_reingest_is_idempotent() -> None:
     second = store.count_documents()
 
     assert second == first
+
+
+@pytest.mark.live
+def test_chunks_respect_embedding_token_budget() -> None:
+    """No emitted chunk exceeds the embedding model's token budget.
+
+    Guards against silent embed-time truncation: the embedder would otherwise
+    encode only the start of an over-long chunk while the full text is still
+    stored/displayed. The chunker is capped to ``max_tokens - margin``.
+    """
+    sources = _sample_sources()
+    if not sources:
+        pytest.skip("No sample corpus in tests/data (pending F4 confirmation).")
+
+    from docling_core.transforms.chunker.tokenizer.huggingface import HuggingFaceTokenizer
+    from haystack_integrations.components.converters.docling import (
+        DoclingConverter,
+        ExportType,
+    )
+
+    from corpus_rag.pipelines.indexing import build_chunker, chunk_token_budget
+    from corpus_rag.settings import get_settings
+
+    settings = get_settings()
+    budget = chunk_token_budget(settings.embed_model_id, settings.chunk_token_margin)
+    converter = DoclingConverter(
+        export_type=ExportType.DOC_CHUNKS,
+        chunker=build_chunker(settings.embed_model_id, token_margin=settings.chunk_token_margin),
+    )
+    docs = converter.run(sources=sources)["documents"]
+    assert docs, "no chunks emitted from the sample corpus"
+
+    tokenizer = HuggingFaceTokenizer.from_pretrained(model_name=settings.embed_model_id)
+    counts = [tokenizer.count_tokens(d.content) for d in docs]
+    oversized = [c for c in counts if c > budget]
+    assert not oversized, f"chunks exceed token budget {budget}: {oversized}"
