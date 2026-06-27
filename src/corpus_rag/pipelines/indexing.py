@@ -36,20 +36,6 @@ if TYPE_CHECKING:
     from haystack.document_stores.types import DocumentStore
 
 
-def _quiet_chunking_tokenizer_noise() -> None:
-    """Silence the HuggingFace tokenizer's "Token indices sequence length is
-    longer than 512" log — it fires while the chunker MEASURES a long source
-    element before splitting it, not because an over-long chunk is stored
-    (build_chunker caps output to the embedding budget). Errors still surface.
-    """
-    try:
-        from transformers.utils import logging as hf_logging
-
-        hf_logging.set_verbosity_error()
-    except Exception:  # noqa: BLE001 — best-effort log hygiene
-        pass
-
-
 def build_converter(settings: Settings | None = None) -> DocumentConverter:
     """Docling ``DocumentConverter`` with OCR gated by ``OCR_ON``.
 
@@ -104,7 +90,6 @@ def build_indexing_pipeline(
     """
     settings = settings or get_settings()
 
-    _quiet_chunking_tokenizer_noise()
     converter = DoclingConverter(
         converter=build_converter(settings),
         export_type=ExportType.DOC_CHUNKS,
