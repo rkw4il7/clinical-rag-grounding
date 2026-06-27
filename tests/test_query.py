@@ -8,7 +8,7 @@ run the real pipeline against the ingested corpus + local LLM and cover §7.5,
 
 from __future__ import annotations
 
-import warnings
+from dataclasses import replace
 from unittest.mock import MagicMock
 
 import pytest
@@ -124,25 +124,18 @@ def _rerank_engine(cosine_docs, reranked_with_scores, reply="grounded answer"):
     """Fake RerankEngine: retriever yields cosine_docs; ranker reorders + rescores.
 
     ``reranked_with_scores`` is a list of (document, rerank_score) in rerank order.
-    The ranker mutates ``document.score`` in place (as the real cross-encoder
-    does), so run_query_reranked must have snapshotted the cosine scores first.
+    The real TransformersSimilarityRanker returns NEW Document objects (copies
+    with the rerank score), preserving each ``Document.id``. The fake mirrors that
+    with ``dataclasses.replace`` — NOT in-place mutation — so run_query_reranked is
+    forced to map the cosine snapshot back by ``Document.id`` (object identity
+    would not survive the copy). Guards the id-vs-identity keying regression.
     """
     engine = MagicMock()
     engine.text_embedder.run.return_value = {"embedding": [0.0, 0.1, 0.2]}
     engine.retriever.run.return_value = {"documents": cosine_docs}
 
     def _rerank(query, documents):
-        ordered = []
-        for doc, score in reranked_with_scores:
-            # The real TransformersSimilarityRanker mutates Document.score in
-            # place; the fake mirrors that (so the snapshot-before-rerank logic is
-            # actually exercised). Haystack warns on the mutation — silence the
-            # cosmetic warning here rather than weaken the fake.
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", message="Mutating attribute")
-                doc.score = score
-            ordered.append(doc)
-        return {"documents": ordered}
+        return {"documents": [replace(doc, score=score) for doc, score in reranked_with_scores]}
 
     engine.ranker.run.side_effect = _rerank
     engine.prompt_builder.run.return_value = {"prompt": "PROMPT"}
