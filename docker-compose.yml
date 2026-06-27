@@ -39,21 +39,33 @@ services:
   # a 0.5B model keeps that usable; swap the -hf repo for a larger one if you
   # have the cores. First start is slow (model download); watch `logs -f llm`.
   llm:
+    # `server` is a floating tag; pin to a dated build (e.g. :server-b4xxx) if you
+    # need reproducibility — a future llama.cpp could change the -hf CLI syntax.
     image: ghcr.io/ggml-org/llama.cpp:server
     profiles: ["llm"]
     command:
       - "-hf"
-      - "Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M"
+      # bartowski mirrors are reliably available; swap for any small GGUF repo.
+      - "bartowski/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M"
       - "--host"
       - "0.0.0.0"
       - "--port"
       - "8080"
       - "-c"
-      - "4096"
+      - "8192"  # headroom for up to RERANK_CANDIDATES chunks + prompt + answer
     ports:
       - "8080:8080"
     volumes:
       - llamacache:/root/.cache/llama.cpp
+    # llama.cpp's server exposes /health; it reports "ok" only once the model is
+    # loaded (after the first-run download), so `docker compose ... --wait` and
+    # `make wait` block until inference is actually ready.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 180s
 
 volumes:
   pgdata:

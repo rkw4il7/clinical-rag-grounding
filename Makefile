@@ -10,6 +10,12 @@ db: ## Start Postgres+pgvector only (container DB)
 stack: ## Start Postgres+pgvector AND the local LLM container
 	docker compose --profile llm up -d
 
+.PHONY: wait
+wait: ## Block until the container LLM is loaded and answering /health
+	@echo "Waiting for LLM at http://localhost:8080/health (first run downloads the model)…"
+	@until curl -fsS http://localhost:8080/health >/dev/null 2>&1; do sleep 3; done
+	@echo "LLM ready."
+
 .PHONY: down
 down: ## Stop all containers (data volumes persist)
 	docker compose down
@@ -24,7 +30,7 @@ logs: ## Follow container logs (e.g. the LLM model download)
 
 .PHONY: backend-docker
 backend-docker: ## Point .env at the container DB + LLM (.env.docker.example)
-	@[ -f .env ] && cp .env .env.bak && echo "Backed up .env -> .env.bak" || true
+	@if [ ! -f .env.bak ] && [ -f .env ]; then cp .env .env.bak; echo "Backed up .env -> .env.bak"; fi
 	cp .env.docker.example .env
 	@echo "Now using the CONTAINER backend. Run: make stack"
 

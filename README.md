@@ -67,11 +67,13 @@ process either way.
 **Option A — fully containerized (DB + LLM):**
 ```bash
 make stack                  # docker compose --profile llm up -d
+make wait                   # block until the LLM has downloaded + loaded (/health)
 make backend-docker         # point .env at the container endpoints
-make logs                   # first start downloads the small GGUF — watch it
 ```
 The `llm` service is llama.cpp's server with a 0.5B Qwen GGUF (CPU; auto-
-downloaded, OpenAI API at `:8080/v1`). Swap the `-hf` model in
+downloaded, OpenAI API at `:8080/v1`). First `make stack` pulls the model, so
+`make wait` (or `docker compose --profile llm up -d --wait`) blocks on its
+`/health` until inference is actually ready. Swap the `-hf` model in
 `./docker-compose.yml` for something larger if you have the cores.
 
 **Option B — your own services (LAN/remote):**
