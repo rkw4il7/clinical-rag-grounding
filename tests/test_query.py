@@ -347,12 +347,12 @@ def test_live_rerank_overrides_cosine_order() -> None:
     trivially-separable corpus the two orders can legitimately agree, so we skip
     rather than fail when there are too few sources to expect disagreement.
     """
-    engine, _, settings = _live_rerank_engine_and_store()
-    _, sources = run_query_reranked(
-        "Which oral antibiotic is recommended as the first-line treatment for pneumonia in adults?",
-        engine=engine,
-        settings=settings,
-    )
+    engine, store, settings = _live_rerank_engine_and_store()
+    # Domain-agnostic: derive a query the corpus answers (same as the other live
+    # grounded tests) instead of a hardcoded clinical query that would retrieve
+    # unrelated chunks — and randomly (not) reorder — on a non-clinical corpus.
+    query = _corpus_answerable_query(store, settings)
+    _, sources = run_query_reranked(query, engine=engine, settings=settings)
 
     if len(sources) < 5:
         pytest.skip("Too few sources to expect a rerank/cosine disagreement.")

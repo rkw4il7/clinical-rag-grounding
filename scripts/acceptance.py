@@ -61,6 +61,7 @@ class Result:
     name: str
     passed: bool
     detail: str = ""
+    skipped: bool = False  # not exercised (e.g. N/A under current config), not a pass
 
 
 @dataclass
@@ -151,8 +152,10 @@ def check_4_idempotent_reingest(ctx: Context) -> Result:
     # Re-write the already-embedded docs (same ids -> OVERWRITE).
     docs = ctx.store.filter_documents()
     assert docs and docs[0].embedding is not None, (
-        "filter_documents() returned docs without embeddings; "
-        "cannot verify idempotency without corrupting retrieval state"
+        "filter_documents() returned docs without embeddings; re-writing them "
+        "would null out the vectors and corrupt retrieval. Likely a "
+        "pgvector-haystack version change in how filter_documents() returns "
+        "embeddings — re-fetch with embeddings before OVERWRITE."
     )
     ctx.store.write_documents(docs, policy=DuplicatePolicy.OVERWRITE)
     after = ctx.store.count_documents()
@@ -226,7 +229,9 @@ def check_5_retrieval_count_scores(ctx: Context) -> Result:
         return Result(
             "§7.5 count=min(TOP_K,N), non-increasing scores",
             True,
-            f"SKIPPED: MIN_SCORE={ctx.settings.min_score} post-filters docs",
+            f"MIN_SCORE={ctx.settings.min_score} post-filters docs; exact-count "
+            "assertion not applicable",
+            skipped=True,
         )
     q = _grounded_query(ctx)
     _, docs = run_query(q, engine=_query_engine(ctx), settings=ctx.settings)
@@ -359,17 +364,19 @@ def run_all(grounded_query: str | None = None) -> list[Result]:
             results.append(Result(check.__name__, False, f"EXC: {exc}"))
             traceback.print_exc()
         r = results[-1]
-        print(f"[{'PASS' if r.passed else 'FAIL'}] {r.name} — {r.detail}", flush=True)
+        status = "SKIP" if r.skipped else ("PASS" if r.passed else "FAIL")
+        print(f"[{status}] {r.name} — {r.detail}", flush=True)
     return results
 
 
 def write_report(results: list[Result], path: Path) -> None:
-    passed = sum(r.passed for r in results)
+    skipped = sum(r.skipped for r in results)
+    passed = sum(r.passed and not r.skipped for r in results)
     total = len(results)
     lines = [
         "# Corpus RAG Explorer — Acceptance Report",
         "",
-        f"**Result:** {passed}/{total} checks passed.",
+        f"**Result:** {passed}/{total} checks passed ({skipped} skipped).",
         "",
         "## Checks",
         "",
@@ -377,7 +384,7 @@ def write_report(results: list[Result], path: Path) -> None:
         "| --- | --- | --- |",
     ]
     for r in results:
-        status = "✅ PASS" if r.passed else "❌ FAIL"
+        status = "⏭ SKIP" if r.skipped else ("✅ PASS" if r.passed else "❌ FAIL")
         lines.append(f"| {r.name} | {status} | {r.detail} |")
     lines += [
         "",
@@ -434,9 +441,11 @@ def main() -> int:
 
     results = run_all(grounded_query=args.grounded_query)
     write_report(results, Path(args.report))
-    passed = sum(r.passed for r in results)
-    print(f"\n{passed}/{len(results)} checks passed.")
-    return 0 if passed == len(results) else 1
+    skipped = sum(r.skipped for r in results)
+    passed = sum(r.passed and not r.skipped for r in results)
+    failed = sum(not r.passed and not r.skipped for r in results)
+    print(f"\n{passed}/{len(results)} checks passed ({skipped} skipped, {failed} failed).")
+    return 0 if failed == 0 else 1
 
 
 if __name__ == "__main__":

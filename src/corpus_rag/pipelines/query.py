@@ -245,16 +245,19 @@ def run_query_reranked(
     embedding = engine.text_embedder.run(text=query)["embedding"]
     cosine_docs = engine.retriever.run(query_embedding=embedding)["documents"]
 
-    # Snapshot cosine rank+score NOW; the ranker overwrites Document.score.
-    cosine_by_id = {doc.id: (rank, doc.score) for rank, doc in enumerate(cosine_docs, start=1)}
+    # Snapshot cosine rank+score NOW; the ranker overwrites Document.score in
+    # place and returns the SAME objects reordered. Key by object identity, not
+    # Document.id — ids are a content+meta hash and can collide for duplicate
+    # chunks, which would drop a rank and KeyError on the lookup below.
+    cosine_by_obj = {id(doc): (rank, doc.score) for rank, doc in enumerate(cosine_docs, start=1)}
 
     reranked_docs = engine.ranker.run(query=query, documents=cosine_docs)["documents"]
 
     ranked_sources = [
         RankedSource(
             document=doc,
-            cosine_rank=cosine_by_id[doc.id][0],
-            cosine_score=cosine_by_id[doc.id][1],
+            cosine_rank=cosine_by_obj[id(doc)][0],
+            cosine_score=cosine_by_obj[id(doc)][1],
             rerank_rank=rerank_rank,
             rerank_score=doc.score,
         )

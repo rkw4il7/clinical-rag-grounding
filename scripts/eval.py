@@ -38,7 +38,7 @@ from corpus_rag.eval.harness import (
     faithfulness_rate,
 )
 from corpus_rag.eval.qrels import load_qrels
-from corpus_rag.pipelines.query import run_query
+from corpus_rag.pipelines.query import build_query_engine, run_query
 from corpus_rag.prompts import ABSTENTION_ANSWER
 from corpus_rag.settings import get_settings
 
@@ -174,8 +174,12 @@ def main() -> int:
             generate_fn = _build_generate_fn(settings)
         queries = [c.query for c in cases]
 
+        # Reuse the already-built store; otherwise run_query falls back to
+        # _default_query_engine() and reloads the store + embedder a second time.
+        query_engine = build_query_engine(store, settings)
+
         def run_fn(q: str):
-            return run_query(q, settings=settings)
+            return run_query(q, engine=query_engine, settings=settings)
 
         abstain = abstention_rate(queries, run_fn)
         faith, n_judged = faithfulness_rate(queries, run_fn, generate_fn)
