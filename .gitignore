@@ -147,9 +147,12 @@ activemq-data/
 # SageMath parsed files
 *.sage.py
 
-# Environments
+# Environments — ignore the real .env and ALL personal variants (.env.lan,
+# .env.local, .env.bak, …); only the committed *.example templates are tracked.
 .env
-.env.bak
+.env.*
+!.env.example
+!.env.docker.example
 .envrc
 .venv
 env/
