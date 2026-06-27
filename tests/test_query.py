@@ -8,6 +8,7 @@ run the real pipeline against the ingested corpus + local LLM and cover §7.5,
 
 from __future__ import annotations
 
+import warnings
 from unittest.mock import MagicMock
 
 import pytest
@@ -127,7 +128,13 @@ def _rerank_engine(cosine_docs, reranked_with_scores, reply="grounded answer"):
     def _rerank(query, documents):
         ordered = []
         for doc, score in reranked_with_scores:
-            doc.score = score
+            # The real TransformersSimilarityRanker mutates Document.score in
+            # place; the fake mirrors that (so the snapshot-before-rerank logic is
+            # actually exercised). Haystack warns on the mutation — silence the
+            # cosmetic warning here rather than weaken the fake.
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message="Mutating attribute")
+                doc.score = score
             ordered.append(doc)
         return {"documents": ordered}
 
@@ -142,9 +149,7 @@ def test_rerank_overrides_cosine_order_and_keeps_both_scores() -> None:
     b = Document(content="bbb", score=0.8)
     c = Document(content="ccc", score=0.7)
     # Cross-encoder promotes c (cosine #3) to rerank #1, demoting a and b.
-    engine = _rerank_engine(
-        [a, b, c], [(c, 0.99), (a, 0.50), (b, 0.10)], reply="from sources"
-    )
+    engine = _rerank_engine([a, b, c], [(c, 0.99), (a, 0.50), (b, 0.10)], reply="from sources")
 
     answer, sources = run_query_reranked("q", engine=engine, settings=_settings())
 
@@ -163,9 +168,7 @@ def test_rerank_grounds_llm_on_top_k_only_but_returns_all_candidates() -> None:
     a = Document(content="aaa", score=0.9)
     b = Document(content="bbb", score=0.8)
     c = Document(content="ccc", score=0.7)
-    engine = _rerank_engine(
-        [a, b, c], [(c, 0.99), (a, 0.50), (b, 0.10)], reply="from sources"
-    )
+    engine = _rerank_engine([a, b, c], [(c, 0.99), (a, 0.50), (b, 0.10)], reply="from sources")
 
     # top_k=2: LLM sees only the top 2 reranked (c, a); UI still gets all 3.
     _, sources = run_query_reranked("q", engine=engine, settings=_settings(top_k=2))
@@ -189,9 +192,7 @@ def test_rerank_min_score_gate_abstains_but_still_returns_sources() -> None:
     b = Document(content="bbb", score=0.1)
     engine = _rerank_engine([a, b], [(b, 0.95), (a, 0.30)], reply="discarded")
 
-    answer, sources = run_query_reranked(
-        "q", engine=engine, settings=_settings(min_score=0.5)
-    )
+    answer, sources = run_query_reranked("q", engine=engine, settings=_settings(min_score=0.5))
 
     # Cosine scores below the floor -> abstain, but the 2 sources still surface.
     assert answer == ABSTENTION_ANSWER
@@ -220,9 +221,7 @@ def test_live_retrieval_count_and_ordering() -> None:
     pipeline, store, settings = _live_pipeline_and_store()
     if settings.min_score > 0.0:
         pytest.skip("MIN_SCORE>0 post-filters docs; count assertion not applicable.")
-    _, docs = run_query(
-        "What does the guideline recommend?", pipeline=pipeline, settings=settings
-    )
+    _, docs = run_query("What does the guideline recommend?", pipeline=pipeline, settings=settings)
 
     expected = min(settings.top_k, store.count_documents())
     assert len(docs) == expected
@@ -246,8 +245,7 @@ def test_live_a2_non_abstain_answer_has_verbatim_source() -> None:
     """§2A A2: a grounded answer is accompanied by >=1 verbatim source chunk."""
     pipeline, store, settings = _live_pipeline_and_store()
     answer, docs = run_query(
-        "Which oral antibiotic is recommended as the first-line treatment "
-        "for pneumonia in adults?",
+        "Which oral antibiotic is recommended as the first-line treatment for pneumonia in adults?",
         pipeline=pipeline,
         settings=settings,
     )
@@ -266,9 +264,7 @@ def test_live_a1_no_match_abstains() -> None:
     pipeline, _, settings = _live_pipeline_and_store()
     # Force the no-grounding path via a high MIN_SCORE floor.
     strict = settings.model_copy(update={"min_score": 0.999})
-    answer, _ = run_query(
-        "zzzz unrelated nonsense qqqq", pipeline=pipeline, settings=strict
-    )
+    answer, _ = run_query("zzzz unrelated nonsense qqqq", pipeline=pipeline, settings=strict)
 
     assert answer == ABSTENTION_ANSWER
 
@@ -318,8 +314,7 @@ def test_live_rerank_overrides_cosine_order() -> None:
     """
     engine, _, settings = _live_rerank_engine_and_store()
     _, sources = run_query_reranked(
-        "Which oral antibiotic is recommended as the first-line treatment "
-        "for pneumonia in adults?",
+        "Which oral antibiotic is recommended as the first-line treatment for pneumonia in adults?",
         engine=engine,
         settings=settings,
     )

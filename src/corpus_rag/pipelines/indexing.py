@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from docling.chunking import HybridChunker
+from docling_core.transforms.chunker.tokenizer.huggingface import HuggingFaceTokenizer
 from haystack import Pipeline
 from haystack.components.embedders import SentenceTransformersDocumentEmbedder
 from haystack.components.writers import DocumentWriter
@@ -30,6 +31,18 @@ from corpus_rag.settings import Settings, get_settings
 
 if TYPE_CHECKING:
     from haystack.document_stores.types import DocumentStore
+
+
+def build_chunker(model_id: str) -> HybridChunker:
+    """Build a HybridChunker whose tokenizer matches the embedding model.
+
+    Passes an explicit ``HuggingFaceTokenizer`` (not the bare model-id string,
+    which newer docling deprecates). ``from_pretrained`` derives ``max_tokens``
+    from the model's config, so chunk boundaries are identical to the previous
+    string form — re-ingest idempotency is preserved.
+    """
+    tokenizer = HuggingFaceTokenizer.from_pretrained(model_name=model_id)
+    return HybridChunker(tokenizer=tokenizer)
 
 
 def build_indexing_pipeline(
@@ -47,7 +60,7 @@ def build_indexing_pipeline(
 
     converter = DoclingConverter(
         export_type=ExportType.DOC_CHUNKS,
-        chunker=HybridChunker(tokenizer=settings.embed_model_id),
+        chunker=build_chunker(settings.embed_model_id),
     )
     embedder = SentenceTransformersDocumentEmbedder(model=settings.embed_model_id)
     writer = DocumentWriter(

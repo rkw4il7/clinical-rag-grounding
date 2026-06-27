@@ -28,7 +28,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import psycopg
-from docling.chunking import HybridChunker
 from haystack.components.embedders import SentenceTransformersDocumentEmbedder
 from haystack.document_stores.types import DuplicatePolicy
 from haystack_integrations.components.converters.docling import (
@@ -39,6 +38,7 @@ from haystack_integrations.components.converters.docling import (
 from corpus_rag.adapters import discover_all
 from corpus_rag.document_store import EmbeddingDimensionError, build_document_store
 from corpus_rag.embeddings import resolve_embedding_dim
+from corpus_rag.pipelines.indexing import build_chunker
 from corpus_rag.pipelines.query import (
     build_query_pipeline,
     build_rerank_engine,
@@ -119,7 +119,7 @@ def check_3_ingest(ctx: Context) -> Result:
     # Single Docling pass: convert once, capture emitted content for A3.
     converter = DoclingConverter(
         export_type=ExportType.DOC_CHUNKS,
-        chunker=HybridChunker(tokenizer=ctx.settings.embed_model_id),
+        chunker=build_chunker(ctx.settings.embed_model_id),
     )
     emitted_docs = converter.run(sources=sources)["documents"]
     embedder = SentenceTransformersDocumentEmbedder(model=ctx.settings.embed_model_id)
