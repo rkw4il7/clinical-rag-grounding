@@ -215,6 +215,38 @@ def _live_pipeline_and_store():
     return build_query_pipeline(store, settings), store, settings
 
 
+def _corpus_answerable_query(store, settings) -> str:
+    """A question the *ingested corpus* can actually answer (domain-agnostic).
+
+    Corpus scope is set at runtime, so a hardcoded clinical query (e.g. about
+    pneumonia) legitimately abstains on a corpus that doesn't cover it — which
+    would falsely fail the grounded-path test. Instead derive a question from a
+    real chunk via the eval auto-qrels machinery, guaranteeing the answer exists
+    in-corpus so the grounded path (not abstention) is exercised.
+    """
+    from haystack.components.generators import OpenAIGenerator
+    from haystack.utils import Secret
+
+    from corpus_rag.eval.harness import auto_generate_qrels
+
+    generator = OpenAIGenerator(
+        api_key=Secret.from_token("not-needed-for-local-server"),
+        model=settings.llm_model,
+        api_base_url=settings.llm_base_url,
+        generation_kwargs={"temperature": 0},
+        timeout=settings.llm_timeout,
+    )
+
+    def generate(prompt: str) -> str:
+        replies = generator.run(prompt=prompt).get("replies") or []
+        return replies[0] if replies else ""
+
+    cases = auto_generate_qrels(store.filter_documents(), generate, n=1)
+    if not cases:
+        pytest.skip("Could not derive a corpus-answerable query.")
+    return cases[0].query
+
+
 @pytest.mark.live
 def test_live_retrieval_count_and_ordering() -> None:
     """§7.5: min(TOP_K, N) docs returned with non-increasing scores."""
@@ -244,11 +276,8 @@ def test_live_retrieval_order_is_deterministic() -> None:
 def test_live_a2_non_abstain_answer_has_verbatim_source() -> None:
     """§2A A2: a grounded answer is accompanied by >=1 verbatim source chunk."""
     pipeline, store, settings = _live_pipeline_and_store()
-    answer, docs = run_query(
-        "Which oral antibiotic is recommended as the first-line treatment for pneumonia in adults?",
-        pipeline=pipeline,
-        settings=settings,
-    )
+    query = _corpus_answerable_query(store, settings)
+    answer, docs = run_query(query, pipeline=pipeline, settings=settings)
 
     assert answer != ABSTENTION_ANSWER
     assert len(docs) >= 1
