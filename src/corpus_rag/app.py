@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 
 _FIRST_LINE_MAX = 120
 
+# File types the GUI accepts for upload → ingest. These are the Docling-supported
+# formats in scope (root spec.md §3.1, §7.3); extensions only, no leading dot.
+ALLOWED_UPLOAD_TYPES = ["pdf", "docx", "pptx", "html", "htm", "md"]
+
 
 def first_line(content: str, max_len: int = _FIRST_LINE_MAX) -> str:
     """Derive the expander label from a chunk's content (root §4.4).
@@ -53,6 +57,61 @@ def _get_engine():
     return build_rerank_engine(build_document_store(settings), settings)
 
 
+def _ingest_uploads(uploaded_files) -> int:
+    """Ingest GUI-uploaded files into the corpus; return chunks written.
+
+    Writes each upload to a private temp file (preserving its extension so Docling
+    routes by format), runs the indexing pipeline into the same pgvector store the
+    query path reads, then removes the temp files. New chunks are searchable on the
+    next query (the retriever hits the DB live). Filenames are basename-only to
+    avoid path traversal.
+    """
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    from corpus_rag.document_store import build_document_store
+    from corpus_rag.pipelines.indexing import build_indexing_pipeline, run_indexing
+    from corpus_rag.settings import get_settings
+
+    settings = get_settings()
+    pipeline = build_indexing_pipeline(build_document_store(settings), settings)
+
+    tmpdir = Path(tempfile.mkdtemp(prefix="corpus_upload_"))
+    try:
+        paths: list[str] = []
+        for up in uploaded_files:
+            dest = tmpdir / Path(up.name).name  # basename only (no traversal)
+            dest.write_bytes(up.getvalue())
+            paths.append(str(dest))
+        result = run_indexing(pipeline, paths)
+        return result.get("writer", {}).get("documents_written", 0)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _render_ingest_sidebar() -> None:
+    with st.sidebar:
+        st.header("Add documents")
+        st.caption(
+            "Upload files to ingest into the corpus "
+            f"({', '.join(ALLOWED_UPLOAD_TYPES)}). "
+            "Demo use only — synthetic / non-PHI documents."
+        )
+        uploads = st.file_uploader("Files", type=ALLOWED_UPLOAD_TYPES, accept_multiple_files=True)
+        if uploads and st.button("Ingest uploaded files"):
+            try:
+                with st.spinner("Ingesting (convert → chunk → embed → store)…"):
+                    written = _ingest_uploads(uploads)
+                st.success(
+                    f"Ingested {len(uploads)} file(s) → {written} chunk(s). "
+                    "New content is searchable now."
+                )
+            except Exception:  # noqa: BLE001 — generic message; detail to logs
+                logger.exception("Ingest failed")
+                st.error("Ingest failed. Check the server logs for details.")
+
+
 def _fmt(score: float | None) -> str:
     return f"{score:.4f}" if score is not None else "n/a"
 
@@ -67,6 +126,8 @@ def main() -> None:
         "Answers are grounded in the retrieved corpus; specifics never come from "
         "the model's training data."
     )
+
+    _render_ingest_sidebar()
 
     query = st.chat_input("Ask a question about the corpus")
     if not query:

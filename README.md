@@ -4,6 +4,14 @@ Clinical RAG over multiple sources — semantic retrieval + **grounded** generat
 over a heterogeneous document corpus, with a Streamlit UI that shows the answer
 **beside its verbatim sources**.
 
+## PHI / safety note
+
+This demo is not intended for PHI, diagnosis, treatment recommendations, or
+clinical decision support. The committed fixtures are synthetic and non-PHI. Real
+clinical corpora should be used only in an appropriately secured environment with
+access controls, audit logging, retention controls, and organization-approved
+data handling.
+
 ## Why verbatim sources, always (the point of this app)
 
 In healthcare, an answer alone is not enough. A reader has to be able to check it.

@@ -104,6 +104,16 @@ Single page:
 
 Click-to-expand (accepted in place of hover). No JS, no custom components.
 
+### 5.1 Upload / ingest from the GUI
+A sidebar "Add documents" control lets the user upload one or more files of the
+allowed types (the Docling-supported formats in scope: PDF, DOCX, PPTX, HTML,
+Markdown — see §3.1) and ingest them into the corpus on demand, without the CLI.
+On submit, each upload is written to a private temp file (extension preserved so
+Docling routes by format), run through the **indexing pipeline** (§3.2) into the
+same `PgvectorDocumentStore` the query pipeline reads, and the temp files are
+removed. Newly ingested chunks are immediately searchable (the retriever queries
+the store live). Demo use is synthetic / non-PHI only (see PHI/safety note).
+
 ## 6. Configuration (env)
 
 - `PG_CONN_STR` — `postgresql://USER:PASSWORD@HOST:PORT/DB` (percent-encode special chars
