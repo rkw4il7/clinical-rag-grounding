@@ -48,10 +48,11 @@ from corpus_rag.pipelines.query import (
 from corpus_rag.prompts import ABSTENTION_ANSWER
 from corpus_rag.settings import get_settings
 
-GROUNDED_QUERY = (
-    "Which oral antibiotic is recommended as the first-line treatment "
-    "for pneumonia in adults?"
-)
+# The grounded query is NOT hardcoded to a domain: corpus scope is set at runtime
+# (the deployer uploads cardiology, oncology, … PDFs). It is resolved per run by
+# `_grounded_query` — either from --grounded-query or auto-derived from the
+# ingested corpus (a question the corpus provably answers) so §7.5/§7.6/§7.7/A2
+# never produce a false FAIL on a non-clinical corpus.
 NONSENSE_QUERY = "zzzz unrelated nonsense qqqq vvvv"
 
 
@@ -71,6 +72,9 @@ class Context:
     all_docs: dict = field(default_factory=dict)  # id -> stored Document (cached)
     query_pipeline: object = None
     rerank_engine: object = None
+    grounded_query_override: str | None = None  # from --grounded-query
+    generate_fn: object = None  # lazy single-shot LLM call
+    _grounded_query_cache: str | None = None  # resolved per run, then reused
 
 
 # --- checks --------------------------------------------------------------
@@ -80,14 +84,11 @@ def check_1_extension_and_table(ctx: Context) -> Result:
     """§7.1: CREATE EXTENSION vector; store init creates table + HNSW index."""
     with psycopg.connect(ctx.settings.pg_conn_str) as conn:
         conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-        ext = conn.execute(
-            "SELECT 1 FROM pg_extension WHERE extname='vector'"
-        ).fetchone()
+        ext = conn.execute("SELECT 1 FROM pg_extension WHERE extname='vector'").fetchone()
     ctx.store = build_document_store(ctx.settings)  # creates table + indexes
     with psycopg.connect(ctx.settings.pg_conn_str) as conn:
         table = conn.execute(
-            "SELECT 1 FROM information_schema.tables "
-            "WHERE table_name='haystack_documents'"
+            "SELECT 1 FROM information_schema.tables WHERE table_name='haystack_documents'"
         ).fetchone()
         hnsw = conn.execute(
             "SELECT 1 FROM pg_indexes WHERE tablename='haystack_documents' "
@@ -165,6 +166,59 @@ def _query_pipeline(ctx: Context):
     return ctx.query_pipeline
 
 
+def _generate_fn(ctx: Context):
+    """A single-shot LLM call (temperature 0), built once and cached on ctx."""
+    if ctx.generate_fn is None:
+        from haystack.components.generators import OpenAIGenerator
+        from haystack.utils import Secret
+
+        generator = OpenAIGenerator(
+            api_key=Secret.from_token("not-needed-for-local-server"),
+            model=ctx.settings.llm_model,
+            api_base_url=ctx.settings.llm_base_url,
+            generation_kwargs={"temperature": 0},
+            timeout=ctx.settings.llm_timeout,
+        )
+
+        def generate(prompt: str) -> str:
+            replies = generator.run(prompt=prompt).get("replies") or []
+            return replies[0] if replies else ""
+
+        ctx.generate_fn = generate
+    return ctx.generate_fn
+
+
+def _grounded_query(ctx: Context) -> str:
+    """Resolve a query the corpus provably answers (domain-agnostic).
+
+    Order: explicit --grounded-query, else auto-derive one from the ingested
+    corpus (an LLM question for a sampled chunk), else fall back to a chunk
+    snippet (which trivially retrieves itself). Cached so determinism check_7
+    and A2/§7.6 all use the same string.
+    """
+    if ctx._grounded_query_cache is not None:
+        return ctx._grounded_query_cache
+
+    if ctx.grounded_query_override:
+        ctx._grounded_query_cache = ctx.grounded_query_override
+        return ctx._grounded_query_cache
+
+    from corpus_rag.eval.harness import auto_generate_qrels
+
+    docs = ctx.store.filter_documents()
+    cases = auto_generate_qrels(docs, _generate_fn(ctx), n=1)
+    if cases:
+        ctx._grounded_query_cache = cases[0].query
+    else:
+        # Fallback: a snippet of a real chunk — guaranteed to retrieve grounding.
+        snippet = next(
+            (" ".join((d.content or "").split())[:80] for d in docs if (d.content or "").strip()),
+            "",
+        )
+        ctx._grounded_query_cache = snippet or "What does this document describe?"
+    return ctx._grounded_query_cache
+
+
 def check_5_retrieval_count_scores(ctx: Context) -> Result:
     """§7.5: min(TOP_K, N) docs, non-increasing scores."""
     if ctx.settings.min_score > 0.0:
@@ -173,7 +227,8 @@ def check_5_retrieval_count_scores(ctx: Context) -> Result:
             True,
             f"SKIPPED: MIN_SCORE={ctx.settings.min_score} post-filters docs",
         )
-    _, docs = run_query(GROUNDED_QUERY, pipeline=_query_pipeline(ctx), settings=ctx.settings)
+    q = _grounded_query(ctx)
+    _, docs = run_query(q, pipeline=_query_pipeline(ctx), settings=ctx.settings)
     expected = min(ctx.settings.top_k, ctx.store.count_documents())
     scores = [d.score for d in docs]
     monotonic = all(a >= b for a, b in zip(scores, scores[1:], strict=False))
@@ -184,7 +239,8 @@ def check_5_retrieval_count_scores(ctx: Context) -> Result:
 
 def check_6_gui_data_contract(ctx: Context) -> Result:
     """§7.6: grounded query yields a non-empty response + ranked source list."""
-    answer, docs = run_query(GROUNDED_QUERY, pipeline=_query_pipeline(ctx), settings=ctx.settings)
+    q = _grounded_query(ctx)
+    answer, docs = run_query(q, pipeline=_query_pipeline(ctx), settings=ctx.settings)
     first = docs[0].content.strip().splitlines()[0] if docs else ""
     ok = answer != ABSTENTION_ANSWER and bool(answer.strip()) and len(docs) >= 1 and bool(first)
     detail = f"abstain={answer == ABSTENTION_ANSWER} ndocs={len(docs)}"
@@ -193,8 +249,8 @@ def check_6_gui_data_contract(ctx: Context) -> Result:
 
 def check_7_determinism(ctx: Context) -> Result:
     """§7.7: same query + corpus yields a stable retrieval order."""
-    _, a = run_query(GROUNDED_QUERY, pipeline=_query_pipeline(ctx), settings=ctx.settings)
-    _, b = run_query(GROUNDED_QUERY, pipeline=_query_pipeline(ctx), settings=ctx.settings)
+    _, a = run_query(_grounded_query(ctx), pipeline=_query_pipeline(ctx), settings=ctx.settings)
+    _, b = run_query(_grounded_query(ctx), pipeline=_query_pipeline(ctx), settings=ctx.settings)
     ok = [d.id for d in a] == [d.id for d in b]
     return Result("§7.7 deterministic retrieval order", ok, f"ids_match={ok}")
 
@@ -209,7 +265,16 @@ def check_a1_abstain(ctx: Context) -> Result:
 
 def check_a2_verbatim_source(ctx: Context) -> Result:
     """§2A A2: grounded answer carries >=1 source; displayed==stored byte-equal."""
-    answer, docs = run_query(GROUNDED_QUERY, pipeline=_query_pipeline(ctx), settings=ctx.settings)
+    if not ctx.all_docs:
+        # check_4 populates ctx.all_docs; if it failed, point at the real cause
+        # instead of reporting a spurious byte_equal=False here.
+        return Result(
+            "§2A A2 grounded answer + verbatim source",
+            False,
+            "ctx.all_docs not populated (check_4 failed upstream)",
+        )
+    q = _grounded_query(ctx)
+    answer, docs = run_query(q, pipeline=_query_pipeline(ctx), settings=ctx.settings)
     stored = ctx.all_docs  # cached after check_4
     stored_content = stored[docs[0].id].content if docs and docs[0].id in stored else None
     byte_equal = bool(docs) and docs[0].content == stored_content
@@ -227,13 +292,11 @@ def _rerank_engine(ctx: Context):
 def check_8_rerank(ctx: Context) -> Result:
     """Rerank: min(CANDIDATES,N) sources, both rank/score channels, reorder."""
     _, sources = run_query_reranked(
-        GROUNDED_QUERY, engine=_rerank_engine(ctx), settings=ctx.settings
+        _grounded_query(ctx), engine=_rerank_engine(ctx), settings=ctx.settings
     )
     expected = min(ctx.settings.rerank_candidates, ctx.store.count_documents())
     count_ok = len(sources) == expected
-    both_scores = all(
-        s.cosine_score is not None and s.rerank_score is not None for s in sources
-    )
+    both_scores = all(s.cosine_score is not None and s.rerank_score is not None for s in sources)
     contiguous = [s.rerank_rank for s in sources] == list(range(1, len(sources) + 1))
     rs = [s.rerank_score for s in sources]
     monotonic = all(a >= b for a, b in zip(rs, rs[1:], strict=False))
@@ -253,6 +316,14 @@ def check_a3_no_lossy_transform(ctx: Context) -> Result:
     """§2A A3: stored content is byte-identical to Docling-emitted content."""
     if not ctx.emitted:
         return Result("§2A A3 stored == Docling-emitted (byte-equal)", False, "no emitted capture")
+    if not ctx.all_docs:
+        # Same upstream dependency as A2: without the check_4 cache every id would
+        # read as a mismatch. Report the real cause rather than a false FAIL.
+        return Result(
+            "§2A A3 stored == Docling-emitted (byte-equal)",
+            False,
+            "ctx.all_docs not populated (check_4 failed upstream)",
+        )
     stored = {i: d.content for i, d in ctx.all_docs.items()}  # cached after check_4
     mismatches = [i for i, c in ctx.emitted.items() if stored.get(i) != c]
     ok = not mismatches
@@ -275,10 +346,10 @@ CHECKS = [
 ]
 
 
-def run_all() -> list[Result]:
+def run_all(grounded_query: str | None = None) -> list[Result]:
     settings = get_settings()
     dim = resolve_embedding_dim(settings.embed_model_id)
-    ctx = Context(settings=settings, dim=dim)
+    ctx = Context(settings=settings, dim=dim, grounded_query_override=grounded_query)
     results: list[Result] = []
     for check in CHECKS:
         try:
@@ -351,9 +422,15 @@ def write_report(results: list[Result], path: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run §7 + §2A acceptance checks.")
     parser.add_argument("--report", default="report.md", help="Markdown report output path.")
+    parser.add_argument(
+        "--grounded-query",
+        default=None,
+        help="Query for the §7.5/§7.6/§7.7/A2 checks. Omit to auto-derive one "
+        "from the ingested corpus (domain-agnostic).",
+    )
     args = parser.parse_args()
 
-    results = run_all()
+    results = run_all(grounded_query=args.grounded_query)
     write_report(results, Path(args.report))
     passed = sum(r.passed for r in results)
     print(f"\n{passed}/{len(results)} checks passed.")
