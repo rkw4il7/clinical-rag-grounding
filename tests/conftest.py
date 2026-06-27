@@ -12,7 +12,7 @@ _SETTINGS_ENV_VARS = (
     "TOP_K",
     "MIN_SCORE",
     "CHUNK_TOKEN_MARGIN",
-    "ENABLE_OCR",
+    "OCR_ON",
     "RERANK_CANDIDATES",
     "RERANK_MODEL_ID",
     "LLM_BASE_URL",

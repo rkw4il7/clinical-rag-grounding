@@ -51,14 +51,14 @@ def _quiet_chunking_tokenizer_noise() -> None:
 
 
 def build_converter(settings: Settings | None = None) -> DocumentConverter:
-    """Docling ``DocumentConverter`` with OCR gated by ``ENABLE_OCR``.
+    """Docling ``DocumentConverter`` with OCR gated by ``OCR_ON``.
 
     OCR is off by default: text-layer PDFs extract directly, so running OCR on
     them only adds minutes and noisy empty-result logs. Other formats are
     unaffected; only the PDF pipeline carries the OCR flag.
     """
     settings = settings or get_settings()
-    pdf_options = PdfPipelineOptions(do_ocr=settings.enable_ocr)
+    pdf_options = PdfPipelineOptions(do_ocr=settings.ocr_on)
     return DocumentConverter(
         format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_options)}
     )

@@ -90,15 +90,37 @@ def _ingest_uploads(uploaded_files) -> int:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def _source_name(meta: dict | None) -> str:
+    """Best-effort source filename from a chunk's Docling provenance metadata."""
+    dl = (meta or {}).get("dl_meta") or {}
+    origin = dl.get("origin") or {}
+    return origin.get("filename") or "(unknown source)"
+
+
+def _loaded_documents() -> list[tuple[str, int]]:
+    """Distinct source documents currently in the store, with chunk counts."""
+    from collections import Counter
+
+    from corpus_rag.document_store import build_document_store
+    from corpus_rag.settings import get_settings
+
+    store = build_document_store(get_settings())
+    counts: Counter[str] = Counter()
+    for doc in store.filter_documents():
+        counts[_source_name(doc.meta)] += 1
+    return sorted(counts.items())
+
+
 def _render_ingest_sidebar() -> None:
     with st.sidebar:
-        st.header("Add documents")
-        st.caption(
-            "Upload files to ingest into the corpus "
-            f"({', '.join(ALLOWED_UPLOAD_TYPES)}). "
-            "Demo use only — synthetic / non-PHI documents."
+        st.header("Documents")
+        st.caption(f"Upload to ingest ({', '.join(ALLOWED_UPLOAD_TYPES)}).")
+        uploads = st.file_uploader(
+            "Upload files",
+            type=ALLOWED_UPLOAD_TYPES,
+            accept_multiple_files=True,
+            label_visibility="collapsed",
         )
-        uploads = st.file_uploader("Files", type=ALLOWED_UPLOAD_TYPES, accept_multiple_files=True)
         if uploads and st.button("Ingest uploaded files"):
             try:
                 with st.spinner("Ingesting (convert → chunk → embed → store)…"):
@@ -110,6 +132,19 @@ def _render_ingest_sidebar() -> None:
             except Exception:  # noqa: BLE001 — generic message; detail to logs
                 logger.exception("Ingest failed")
                 st.error("Ingest failed. Check the server logs for details.")
+
+        st.subheader("Currently Loaded")
+        try:
+            loaded = _loaded_documents()
+        except Exception:  # noqa: BLE001 — store may be down; don't crash the page
+            logger.exception("Listing loaded documents failed")
+            st.caption("Could not list documents (store unavailable).")
+            return
+        if not loaded:
+            st.caption("No documents ingested yet.")
+            return
+        for name, n in loaded:
+            st.write(f"- {name} — {n} chunk(s)")
 
 
 def _fmt(score: float | None) -> str:

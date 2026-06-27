@@ -6,7 +6,12 @@ rendering path is exercised manually / via the live acceptance run.
 
 from __future__ import annotations
 
-from corpus_rag.app import _FIRST_LINE_MAX, ALLOWED_UPLOAD_TYPES, first_line
+from corpus_rag.app import (
+    _FIRST_LINE_MAX,
+    ALLOWED_UPLOAD_TYPES,
+    _source_name,
+    first_line,
+)
 
 
 def test_first_line_takes_first_nonempty_line() -> None:
@@ -47,3 +52,14 @@ def test_allowed_upload_types_are_bare_lowercase_extensions() -> None:
     # Streamlit file_uploader wants extensions without a leading dot.
     assert {"pdf", "docx", "html"} <= set(ALLOWED_UPLOAD_TYPES)
     assert all(t == t.lower() and not t.startswith(".") for t in ALLOWED_UPLOAD_TYPES)
+
+
+def test_source_name_from_docling_origin() -> None:
+    meta = {"dl_meta": {"origin": {"filename": "guideline.pdf"}}}
+    assert _source_name(meta) == "guideline.pdf"
+
+
+def test_source_name_falls_back_when_absent() -> None:
+    assert _source_name(None) == "(unknown source)"
+    assert _source_name({}) == "(unknown source)"
+    assert _source_name({"dl_meta": {"origin": {}}}) == "(unknown source)"

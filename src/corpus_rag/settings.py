@@ -60,10 +60,11 @@ class Settings(BaseSettings):
     # room for the embedder's special tokens + a little headroom).
     chunk_token_margin: int = 16
 
-    # OCR during ingest. Off by default: text-layer PDFs extract directly and
-    # running OCR on them is slow and emits noisy empty-result logs. Turn ON only
-    # for scanned/image PDFs that have no text layer.
-    enable_ocr: bool = False
+    # OCR during ingest (env: OCR_ON). On by default — a clinical corpus often
+    # includes scanned/faxed pages, and missing their text silently is worse than
+    # the extra ingest time. Set OCR_ON=false for born-digital-only corpora to
+    # skip image-region OCR (text layers still extract either way).
+    ocr_on: bool = True
 
     # Reranking (post-retrieval). Retrieve RERANK_CANDIDATES by cosine, then a
     # cross-encoder reorders them; the UI shows both rankings side by side to

@@ -18,6 +18,7 @@ def test_defaults(clean_env) -> None:
     assert s.embedding_dim is None
     assert s.top_k == 10
     assert s.min_score == 0.35  # hard grounding gate ON by default (fail-safe)
+    assert s.ocr_on is True  # OCR on by default (clinical scans)
     assert s.llm_model == "local-model"
     assert s.corpus_sources == []
     assert s.pg_conn_str.startswith("postgresql://")
