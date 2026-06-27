@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 from haystack.components.builders import PromptBuilder
 from haystack.components.embedders import SentenceTransformersTextEmbedder
 from haystack.components.generators import OpenAIGenerator
-from haystack.components.rankers import SentenceTransformersSimilarityRanker
+from haystack.components.rankers import TransformersSimilarityRanker
 from haystack.utils import Secret
 from haystack_integrations.components.retrievers.pgvector import (
     PgvectorEmbeddingRetriever,
@@ -186,7 +186,7 @@ class RerankEngine:
 
     text_embedder: SentenceTransformersTextEmbedder
     retriever: PgvectorEmbeddingRetriever
-    ranker: SentenceTransformersSimilarityRanker
+    ranker: TransformersSimilarityRanker
     prompt_builder: PromptBuilder
     generator: OpenAIGenerator
 
@@ -205,7 +205,15 @@ def build_rerank_engine(
         document_store=document_store,
         top_k=settings.rerank_candidates,
     )
-    ranker = SentenceTransformersSimilarityRanker(
+    # NOTE: TransformersSimilarityRanker is haystack-legacy and logs a deprecation
+    # warning. Its successor (SentenceTransformersSimilarityRanker) requires
+    # sentence-transformers >= 4 (its CrossEncoder takes `model_name_or_path`),
+    # but this project pins ST 3.x for embedder/dim stability — using it raises
+    # `CrossEncoder.__init__() got an unexpected keyword argument
+    # 'model_name_or_path'`. Stay on the legacy ranker until ST is bumped; quiet
+    # the cosmetic deprecation log so it doesn't read as an error.
+    logging.getLogger("haystack.components.rankers.transformers_similarity").setLevel(logging.ERROR)
+    ranker = TransformersSimilarityRanker(
         model=settings.rerank_model_id,
         top_k=settings.rerank_candidates,
     )
