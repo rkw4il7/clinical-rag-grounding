@@ -38,7 +38,7 @@ from haystack_integrations.components.converters.docling import (
 from corpus_rag.adapters import discover_all
 from corpus_rag.document_store import EmbeddingDimensionError, build_document_store
 from corpus_rag.embeddings import resolve_embedding_dim
-from corpus_rag.pipelines.indexing import build_chunker
+from corpus_rag.pipelines.indexing import build_chunker, build_converter
 from corpus_rag.pipelines.query import (
     build_query_engine,
     build_rerank_engine,
@@ -119,6 +119,7 @@ def check_3_ingest(ctx: Context) -> Result:
 
     # Single Docling pass: convert once, capture emitted content for A3.
     converter = DoclingConverter(
+        converter=build_converter(ctx.settings),
         export_type=ExportType.DOC_CHUNKS,
         chunker=build_chunker(
             ctx.settings.embed_model_id, token_margin=ctx.settings.chunk_token_margin

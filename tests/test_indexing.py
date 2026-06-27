@@ -138,12 +138,13 @@ def test_chunks_respect_embedding_token_budget() -> None:
         ExportType,
     )
 
-    from corpus_rag.pipelines.indexing import build_chunker, chunk_token_budget
+    from corpus_rag.pipelines.indexing import build_chunker, build_converter, chunk_token_budget
     from corpus_rag.settings import get_settings
 
     settings = get_settings()
     budget = chunk_token_budget(settings.embed_model_id, settings.chunk_token_margin)
     converter = DoclingConverter(
+        converter=build_converter(settings),
         export_type=ExportType.DOC_CHUNKS,
         chunker=build_chunker(settings.embed_model_id, token_margin=settings.chunk_token_margin),
     )

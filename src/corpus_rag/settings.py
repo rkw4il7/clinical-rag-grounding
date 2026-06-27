@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     # room for the embedder's special tokens + a little headroom).
     chunk_token_margin: int = 16
 
+    # OCR during ingest. Off by default: text-layer PDFs extract directly and
+    # running OCR on them is slow and emits noisy empty-result logs. Turn ON only
+    # for scanned/image PDFs that have no text layer.
+    enable_ocr: bool = False
+
     # Reranking (post-retrieval). Retrieve RERANK_CANDIDATES by cosine, then a
     # cross-encoder reorders them; the UI shows both rankings side by side to
     # demonstrate the rerank overriding the initial cosine order.

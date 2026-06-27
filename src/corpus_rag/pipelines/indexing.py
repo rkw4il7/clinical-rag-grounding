@@ -16,6 +16,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from docling.chunking import HybridChunker
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling_core.transforms.chunker.tokenizer.huggingface import HuggingFaceTokenizer
 from haystack import Pipeline
 from haystack.components.embedders import SentenceTransformersDocumentEmbedder
@@ -31,6 +34,34 @@ from corpus_rag.settings import Settings, get_settings
 
 if TYPE_CHECKING:
     from haystack.document_stores.types import DocumentStore
+
+
+def _quiet_chunking_tokenizer_noise() -> None:
+    """Silence the HuggingFace tokenizer's "Token indices sequence length is
+    longer than 512" log — it fires while the chunker MEASURES a long source
+    element before splitting it, not because an over-long chunk is stored
+    (build_chunker caps output to the embedding budget). Errors still surface.
+    """
+    try:
+        from transformers.utils import logging as hf_logging
+
+        hf_logging.set_verbosity_error()
+    except Exception:  # noqa: BLE001 — best-effort log hygiene
+        pass
+
+
+def build_converter(settings: Settings | None = None) -> DocumentConverter:
+    """Docling ``DocumentConverter`` with OCR gated by ``ENABLE_OCR``.
+
+    OCR is off by default: text-layer PDFs extract directly, so running OCR on
+    them only adds minutes and noisy empty-result logs. Other formats are
+    unaffected; only the PDF pipeline carries the OCR flag.
+    """
+    settings = settings or get_settings()
+    pdf_options = PdfPipelineOptions(do_ocr=settings.enable_ocr)
+    return DocumentConverter(
+        format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_options)}
+    )
 
 
 def embedding_max_tokens(model_id: str) -> int:
@@ -73,7 +104,9 @@ def build_indexing_pipeline(
     """
     settings = settings or get_settings()
 
+    _quiet_chunking_tokenizer_noise()
     converter = DoclingConverter(
+        converter=build_converter(settings),
         export_type=ExportType.DOC_CHUNKS,
         chunker=build_chunker(settings.embed_model_id, token_margin=settings.chunk_token_margin),
     )
