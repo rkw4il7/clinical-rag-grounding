@@ -40,6 +40,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _warn_if_gate_open(settings: Settings) -> None:
+    """Warn when MIN_SCORE == 0: the hard grounding gate is disabled (fail-open)."""
+    if settings.min_score <= 0.0:
+        logger.warning(
+            "MIN_SCORE=%s disables the §2A hard grounding gate: the retriever "
+            "always returns top_k and the generator always runs, so grounding "
+            "rests on the prompt alone. Set MIN_SCORE > 0 for the mechanical gate.",
+            settings.min_score,
+        )
+
+
 def _build_generator(settings: Settings) -> OpenAIGenerator:
     return OpenAIGenerator(
         # Local OpenAI-compatible servers ignore the key but the client requires
@@ -73,6 +84,7 @@ def build_query_engine(
     is only invoked once grounding is established.
     """
     settings = settings or get_settings()
+    _warn_if_gate_open(settings)
 
     text_embedder = SentenceTransformersTextEmbedder(model=settings.embed_model_id)
     text_embedder.warm_up()
@@ -179,6 +191,7 @@ def build_rerank_engine(
 ) -> RerankEngine:
     """Build + warm up the components for cosine-retrieve → cross-encoder rerank."""
     settings = settings or get_settings()
+    _warn_if_gate_open(settings)
 
     text_embedder = SentenceTransformersTextEmbedder(model=settings.embed_model_id)
     text_embedder.warm_up()

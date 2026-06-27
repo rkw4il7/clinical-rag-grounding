@@ -15,9 +15,13 @@ Run:  uv run streamlit run src/corpus_rag/app.py
 
 from __future__ import annotations
 
+import logging
+
 import streamlit as st
 
 from corpus_rag.prompts import ABSTENTION_ANSWER
+
+logger = logging.getLogger(__name__)
 
 _FIRST_LINE_MAX = 120
 
@@ -74,8 +78,11 @@ def main() -> None:
     try:
         with st.spinner("Retrieving, reranking, and generating…"):
             answer, sources = run_query_reranked(query, engine=_get_engine())
-    except Exception as exc:  # noqa: BLE001 — surface any failure in-app, not a traceback
-        st.error(f"Query failed: {exc}")
+    except Exception:  # noqa: BLE001 — show a generic message; detail goes to logs
+        # Never surface raw exception text in a clinical-facing UI: DB/LLM errors
+        # can embed the connection string (credentials) or other internals.
+        logger.exception("Query failed")
+        st.error("Query failed. Check the server logs for details.")
         return
 
     st.subheader("Response")

@@ -16,11 +16,17 @@ from dataclasses import dataclass
 
 
 def precision_at_k(flags: Sequence[bool], k: int) -> float:
-    """Fraction of the top-``k`` retrieved documents that are relevant."""
+    """Fraction of the top-``k`` retrieved documents that are relevant.
+
+    Divides by ``min(k, len(flags))`` so a corpus smaller than ``k`` is not
+    penalised for documents that cannot exist (standard IR convention).
+    """
     if k <= 0:
         raise ValueError("k must be >= 1")
-    top = flags[:k]
-    return sum(1 for f in top if f) / k
+    denom = min(k, len(flags))
+    if denom == 0:
+        return 0.0
+    return sum(1 for f in flags[:k] if f) / denom
 
 
 def recall_at_k(covered: int, total_relevant: int) -> float:
@@ -49,15 +55,19 @@ def reciprocal_rank(flags: Sequence[bool]) -> float:
     return 0.0
 
 
-def ndcg_at_k(flags: Sequence[bool], k: int, total_relevant: int) -> float:
+def ndcg_at_k(gains: Sequence[bool], k: int, total_relevant: int) -> float:
     """Normalised DCG@k with binary gains.
 
-    DCG uses gain 1 for each relevant doc, discounted by ``1/log2(rank+1)``. The
-    ideal DCG places ``min(total_relevant, k)`` relevant docs at the top ranks.
+    ``gains`` MUST credit each gold item at most once (see
+    ``qrels.relevance_gains``): the ideal DCG places ``min(total_relevant, k)``
+    items at the top ranks, so if ``gains`` instead credited every relevant
+    *document* (multiple docs per gold item) the result could exceed 1.0. With
+    per-item gains, earned and ideal DCG share the same denominator and the
+    result stays in [0, 1].
     """
     if k <= 0:
         raise ValueError("k must be >= 1")
-    dcg = sum(1.0 / math.log2(i + 1) for i, f in enumerate(flags[:k], start=1) if f)
+    dcg = sum(1.0 / math.log2(i + 1) for i, g in enumerate(gains[:k], start=1) if g)
     ideal_hits = min(total_relevant, k)
     idcg = sum(1.0 / math.log2(i + 1) for i in range(1, ideal_hits + 1))
     return dcg / idcg if idcg > 0 else 0.0
@@ -89,15 +99,26 @@ class RetrievalMetrics:
 
 
 def per_query(
-    flags: Sequence[bool], *, k: int, covered: int, total_relevant: int
+    flags: Sequence[bool],
+    *,
+    k: int,
+    covered: int,
+    total_relevant: int,
+    gains: Sequence[bool] | None = None,
 ) -> RetrievalMetrics:
-    """Compute all metrics for a single query's ranked relevance flags."""
+    """Compute all metrics for a single query's ranked relevance.
+
+    ``flags`` are per-document (any-spec match) — used for precision, MRR, hit.
+    ``gains`` credit each gold item at most once — used for nDCG so it stays in
+    [0, 1]; defaults to ``flags`` when the caller has no per-item gains (safe when
+    no document matches more than one item).
+    """
     return RetrievalMetrics(
         k=k,
         precision=precision_at_k(flags, k),
         recall=recall_at_k(covered, total_relevant),
         mrr=reciprocal_rank(flags),
-        ndcg=ndcg_at_k(flags, k, total_relevant),
+        ndcg=ndcg_at_k(flags if gains is None else gains, k, total_relevant),
         hit=hit_at_k(flags, k),
         n_queries=1,
     )

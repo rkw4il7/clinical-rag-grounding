@@ -49,7 +49,11 @@ class Settings(BaseSettings):
 
     # Retrieval / grounding knobs.
     top_k: int = 10
-    min_score: float = 0.0  # abstention floor; 0.0 == off (spec §2A.3)
+    # Abstention floor (cosine, 0..1). Default non-zero so the §2A grounding gate
+    # is ON by default: below this, chunks are dropped and the app abstains BEFORE
+    # generating. Setting 0.0 disables the hard gate (grounding then rests only on
+    # the prompt) — fail-open, so build_query_engine/build_rerank_engine warn.
+    min_score: float = 0.35
 
     # Chunking: cap each chunk to the embedding model's max tokens MINUS this
     # margin, so no chunk is silently truncated at embed time (the margin leaves

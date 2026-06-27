@@ -105,6 +105,28 @@ def relevance_flags(docs: Sequence[Document], specs: Sequence[RelevanceSpec]) ->
     return [any(doc_matches(d, s) for s in specs) for d in docs]
 
 
+def relevance_gains(docs: Sequence[Document], specs: Sequence[RelevanceSpec]) -> list[bool]:
+    """Per-rank binary gains crediting each gold spec at most once.
+
+    Each spec is credited at the FIRST retrieved document that covers it; later
+    docs covering an already-credited spec score 0. This keeps the total earned
+    gain ≤ the number of distinct specs, so nDCG (whose ideal DCG is computed over
+    that spec count) stays in [0, 1] even when several docs match one spec.
+    Distinct from :func:`relevance_flags` (per-document, any-spec match).
+    """
+    covered: set[int] = set()
+    gains: list[bool] = []
+    for d in docs:
+        gain = False
+        for i, s in enumerate(specs):
+            if i not in covered and doc_matches(d, s):
+                covered.add(i)
+                gain = True
+                break
+        gains.append(gain)
+    return gains
+
+
 def specs_covered(docs: Sequence[Document], specs: Sequence[RelevanceSpec]) -> int:
     """Count distinct gold specs with >=1 matching document in ``docs``.
 

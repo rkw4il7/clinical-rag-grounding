@@ -36,6 +36,7 @@ from corpus_rag.eval.qrels import (
     load_qrels,
     parse_qrels,
     relevance_flags,
+    relevance_gains,
     specs_covered,
 )
 from corpus_rag.prompts import ABSTENTION_ANSWER
@@ -52,6 +53,13 @@ def test_precision_at_k() -> None:
 def test_precision_at_k_rejects_bad_k() -> None:
     with pytest.raises(ValueError):
         precision_at_k([True], 0)
+
+
+def test_precision_at_k_divides_by_available_docs() -> None:
+    # Corpus smaller than k: denominator is min(k, len), not k.
+    assert precision_at_k([True], 5) == 1.0
+    assert precision_at_k([True, False], 5) == 0.5
+    assert precision_at_k([], 5) == 0.0
 
 
 def test_recall_at_k_counts_covered_over_total() -> None:
@@ -86,6 +94,19 @@ def test_ndcg_at_k_discounts_lower_ranks() -> None:
 
 def test_ndcg_at_k_zero_when_no_relevant() -> None:
     assert ndcg_at_k([False, False], k=2, total_relevant=0) == 0.0
+
+
+def test_ndcg_at_k_stays_within_one_with_per_spec_gains() -> None:
+    # Two docs match the SAME single spec. Per-document flags ([True, True]) would
+    # push raw nDCG above 1.0; per-spec gains ([True, False]) keep it in [0, 1].
+    docs = [Document(content="hand hygiene a"), Document(content="hand hygiene b")]
+    specs = [RelevanceSpec(contains="hand hygiene")]
+    flags = relevance_flags(docs, specs)
+    gains = relevance_gains(docs, specs)
+    assert flags == [True, True]
+    assert gains == [True, False]  # spec credited once, at its first covering doc
+    assert ndcg_at_k(flags, k=2, total_relevant=1) > 1.0  # the bug, if fed flags
+    assert ndcg_at_k(gains, k=2, total_relevant=1) == pytest.approx(1.0)
 
 
 def test_aggregate_macro_averages() -> None:
@@ -148,6 +169,17 @@ def test_relevance_flags_and_specs_covered() -> None:
     assert specs_covered(docs, specs) == 2
     # Top-1 only covers the pneumonia spec.
     assert specs_covered(docs[:1], specs) == 1
+
+
+def test_relevance_gains_credits_each_spec_once() -> None:
+    docs = [
+        Document(content="pneumonia A"),  # covers pneumonia spec (first) -> gain
+        Document(content="pneumonia B"),  # pneumonia already credited -> no gain
+        Document(content="INR 2-3"),  # covers INR spec (first) -> gain
+    ]
+    specs = [RelevanceSpec(contains="pneumonia"), RelevanceSpec(contains="INR")]
+    assert relevance_gains(docs, specs) == [True, False, True]
+    assert sum(relevance_gains(docs, specs)) <= len(specs)
 
 
 def test_parse_qrels_round_trip() -> None:
@@ -257,9 +289,10 @@ def test_faithfulness_rate_excludes_abstentions() -> None:
     assert rate == pytest.approx(0.5)
 
 
-def test_faithfulness_rate_all_abstain_is_vacuously_one() -> None:
+def test_faithfulness_rate_none_when_all_abstain() -> None:
+    # None (not 1.0): nothing was judged, so "100% faithful" would be misleading.
     rate, n = faithfulness_rate(["a"], lambda q: (ABSTENTION_ANSWER, []), lambda p: "SUPPORTED")
-    assert (rate, n) == (1.0, 0)
+    assert (rate, n) == (None, 0)
 
 
 # --- Layer 3 auto-generated qrels ---------------------------------------

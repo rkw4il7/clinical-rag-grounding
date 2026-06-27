@@ -21,6 +21,7 @@ from corpus_rag.eval.qrels import (
     EvalCase,
     RelevanceSpec,
     relevance_flags,
+    relevance_gains,
     specs_covered,
 )
 from corpus_rag.prompts import ABSTENTION_ANSWER
@@ -62,8 +63,9 @@ def evaluate_retrieval(
     for case in cases:
         docs = retrieve_fn(case.query)
         flags = relevance_flags(docs, case.relevant)
+        gains = relevance_gains(docs, case.relevant)
         covered = specs_covered(docs[:k], case.relevant)
-        m = per_query(flags, k=k, covered=covered, total_relevant=len(case.relevant))
+        m = per_query(flags, k=k, covered=covered, total_relevant=len(case.relevant), gains=gains)
         per_case.append(
             CaseResult(
                 query=case.query,
@@ -139,6 +141,11 @@ def judge_faithfulness(
 ) -> bool | None:
     """LLM-judge: are all specific claims in ``answer`` entailed by ``docs``?
 
+    Caveat: by default the judge runs on the SAME local model as the generator
+    (``scripts/eval.py`` reuses one endpoint), so this is a self-grading loop, not
+    an independent audit. For a real audit, pass a ``generate_fn`` backed by a
+    different model.
+
     :returns: ``True`` (supported), ``False`` (unsupported), or ``None`` when the
         answer is an abstention (nothing to judge — excluded from the rate).
     """
@@ -160,11 +167,12 @@ def faithfulness_rate(
     queries: Sequence[str],
     run_fn: Callable[[str], tuple[str, list[Document]]],
     generate_fn: GenerateFn,
-) -> tuple[float, int]:
+) -> tuple[float | None, int]:
     """Fraction of non-abstaining answers judged fully grounded.
 
-    :returns: ``(rate, n_judged)``. ``rate`` is 1.0 by convention when no answer
-        was judgeable (all abstained); ``n_judged`` discloses the sample size.
+    :returns: ``(rate, n_judged)``. ``rate`` is ``None`` when nothing was
+        judgeable (every answer abstained) — NOT 1.0, which would falsely read as
+        "100% faithful". ``n_judged`` discloses the sample size.
     """
     verdicts = []
     for q in queries:
@@ -173,7 +181,7 @@ def faithfulness_rate(
         if v is not None:
             verdicts.append(v)
     if not verdicts:
-        return 1.0, 0
+        return None, 0
     return sum(1 for v in verdicts if v) / len(verdicts), len(verdicts)
 
 
@@ -207,11 +215,18 @@ def auto_generate_qrels(
     """Synthesize qrels FROM the ingested corpus (Layer 3), no human labels.
 
     For up to ``n`` evenly-sampled chunks, ask the LLM to write a question the
-    chunk answers; the chunk becomes that question's gold-relevant doc (matched
-    by a distinctive content snippet, robust to re-chunking).
+    chunk answers; the chunk becomes that question's gold-relevant doc, matched by
+    its first ``snippet_len`` characters.
 
-    Sampling is deterministic (evenly spaced) so the generated set is stable for
-    a fixed corpus + model at temperature 0.
+    Caveats (do not oversell this):
+    - **Self-retrieval circularity.** The question is generated FROM the chunk and
+      then used to test retrieval of that SAME chunk, so this measures
+      self-retrievability — a weak proxy that tends to inflate retrieval scores,
+      not an independent gold set.
+    - **Snippet fragility.** The gold key is a fixed-length content prefix; if a
+      later re-chunk splits inside those characters the substring match can break.
+    - Sampling is deterministic (evenly spaced), so the set is stable for a fixed
+      corpus + model at temperature 0.
     """
     usable = [d for d in docs if (d.content or "").strip()]
     if not usable:

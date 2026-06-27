@@ -179,6 +179,7 @@ def main() -> int:
 
         abstain = abstention_rate(queries, run_fn)
         faith, n_judged = faithfulness_rate(queries, run_fn, generate_fn)
+        faith_str = "n/a (all abstained)" if faith is None else round(faith, 3)
         # Citation coverage over non-abstaining answers.
         coverages = []
         for q in queries:
@@ -194,7 +195,7 @@ def main() -> int:
             "| Metric | Value |",
             "| --- | --- |",
             f"| abstention rate | {round(abstain, 3)} |",
-            f"| faithfulness rate (LLM-judge) | {round(faith, 3)} (n={n_judged}) |",
+            f"| faithfulness rate (LLM-judge) | {faith_str} (n={n_judged}) |",
             f"| citation coverage (lexical proxy) | {round(avg_cov, 3)} |",
         ]
         for line in l2:

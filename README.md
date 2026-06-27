@@ -130,11 +130,16 @@ uv run python scripts/acceptance.py --report report.md
 ```
 
 ### Retrieval / grounding eval (optional)
-Precision/recall/MRR/nDCG against a gold set, plus reference-free grounding
-faithfulness. See `./scripts/eval.py`:
+Precision/recall/MRR/nDCG against a gold set, plus label-free grounding signals
+(abstention rate, LLM-judge faithfulness, lexical citation coverage). See
+`./scripts/eval.py`:
 ```bash
 uv run python scripts/eval.py --qrels tests/eval/qrels.example.json --reference-free
 ```
 ```bash
 uv run python scripts/eval.py --auto-generate 25   # build a gold set from the corpus
 ```
+**Honest limits:** auto-generated qrels test *self-retrievability* (the question is
+written from the chunk it then retrieves), and the faithfulness judge defaults to
+the **same** local model as the generator (self-grading). Treat these as smoke
+signals; use a hand-authored gold set and a separate judge model for real numbers.

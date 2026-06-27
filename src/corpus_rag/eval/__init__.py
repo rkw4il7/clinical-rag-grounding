@@ -39,6 +39,7 @@ from corpus_rag.eval.qrels import (
     doc_matches,
     load_qrels,
     relevance_flags,
+    relevance_gains,
     specs_covered,
 )
 
@@ -55,5 +56,6 @@ __all__ = [
     "recall_at_k",
     "reciprocal_rank",
     "relevance_flags",
+    "relevance_gains",
     "specs_covered",
 ]
