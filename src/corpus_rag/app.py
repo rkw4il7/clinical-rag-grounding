@@ -134,13 +134,21 @@ def _rank_score(rank: int, score: float | None) -> str:
     return f"{rank} / {score:.4f}" if score is not None else f"{rank} / n/a"
 
 
+# Display name for a stored chunk, as a SQL expression: our ingest-time ``source``
+# meta, else Docling's doc-origin filename, else a placeholder. Shared by the list
+# and the unload query so "remove X" deletes exactly the group shown as "X".
+_SOURCE_NAME_SQL = (
+    "COALESCE(meta->>'source', meta->'dl_meta'->'origin'->>'filename', '(unknown source)')"
+)
+
+
 @st.cache_data(ttl=30, show_spinner=False)
 def _loaded_documents() -> list[tuple[str, int]]:
     """Distinct source documents in the store with chunk counts.
 
     Aggregates in SQL so the whole corpus (and its embeddings) is NOT pulled into
     the app on every Streamlit rerun — only ``(filename, count)`` rows come back.
-    Cached briefly; ``_loaded_documents.clear()`` after an ingest refreshes it.
+    Cached briefly; ``_loaded_documents.clear()`` after an ingest/unload refreshes it.
 
     Assumes ``PgvectorDocumentStore``'s default table name (``haystack_documents``);
     this app exposes no table-name setting. Deriving it from a built store would
@@ -151,15 +159,35 @@ def _loaded_documents() -> list[tuple[str, int]]:
     from corpus_rag.settings import get_settings
 
     sql = (
-        "SELECT COALESCE("
-        "meta->>'source', "
-        "meta->'dl_meta'->'origin'->>'filename', "
-        "'(unknown source)') AS name, "
-        "COUNT(*) AS n FROM haystack_documents GROUP BY name ORDER BY name"
+        f"SELECT {_SOURCE_NAME_SQL} AS name, COUNT(*) AS n "
+        "FROM haystack_documents GROUP BY name ORDER BY name"
     )
     with psycopg.connect(get_settings().pg_conn_str) as conn:
         rows = conn.execute(sql).fetchall()
     return [(str(name), int(n)) for name, n in rows]
+
+
+def _unload_document(name: str) -> int:
+    """Delete every chunk whose display name == ``name``; return rows removed.
+
+    Matches the exact expression the "Currently Loaded" list shows, so removing
+    "report.pdf" deletes all of its chunks (including duplicate copies). Also
+    deletes the persisted upload file so a later ``--reset`` rebuild won't re-add
+    it. The retriever reads the store live, so the change applies to the next query.
+    """
+    import psycopg
+
+    from corpus_rag.settings import get_settings
+
+    sql = f"DELETE FROM haystack_documents WHERE {_SOURCE_NAME_SQL} = %s"
+    with psycopg.connect(get_settings().pg_conn_str) as conn:
+        removed = conn.execute(sql, (name,)).rowcount
+
+    # Best-effort: drop the persisted upload of the same basename.
+    upload = UPLOAD_DIR / Path(name).name
+    if upload.is_file():
+        upload.unlink()
+    return int(removed)
 
 
 def _render_ingest_sidebar() -> None:
@@ -222,7 +250,23 @@ def _render_ingest_sidebar() -> None:
             st.caption("No documents ingested yet.")
             return
         for name, n in loaded:
-            st.write(f"- {name} — {n} chunk(s)")
+            label_col, btn_col = st.columns([0.82, 0.18])
+            label_col.write(f"{name} — {n} chunk(s)")
+            if btn_col.button("✕", key=f"unload_{name}", help=f"Remove {name} from the corpus"):
+                try:
+                    removed = _unload_document(name)
+                    _loaded_documents.clear()
+                    st.session_state["ingest_msg"] = (
+                        "ok",
+                        f"Removed {name} ({removed} chunk(s)).",
+                    )
+                except Exception:  # noqa: BLE001 — generic message; detail to logs
+                    logger.exception("Unload failed")
+                    st.session_state["ingest_msg"] = (
+                        "err",
+                        "Remove failed. Check the server logs for details.",
+                    )
+                st.rerun()
 
 
 def main() -> None:
