@@ -57,31 +57,39 @@ def _get_engine():
     return build_rerank_engine(build_document_store(settings), settings)
 
 
+@st.cache_resource(show_spinner="Loading ingest pipeline…")
+def _get_ingest_pipeline():
+    """Build the Docling → embed → write pipeline once (the embedder is heavy)."""
+    from corpus_rag.document_store import build_document_store
+    from corpus_rag.pipelines.indexing import build_indexing_pipeline
+    from corpus_rag.settings import get_settings
+
+    settings = get_settings()
+    return build_indexing_pipeline(build_document_store(settings), settings)
+
+
 def _ingest_uploads(uploaded_files) -> int:
     """Ingest GUI-uploaded files into the corpus; return chunks written.
 
-    Writes each upload to a private temp file (preserving its extension so Docling
-    routes by format), runs the indexing pipeline into the same pgvector store the
-    query path reads, then removes the temp files. New chunks are searchable on the
-    next query (the retriever hits the DB live). Filenames are basename-only to
-    avoid path traversal.
+    Writes each upload to a private temp file (extension preserved so Docling
+    routes by format), runs the cached indexing pipeline into the same pgvector
+    store the query path reads, then removes the temp files. New chunks are
+    searchable on the next query. Temp names are basename-only (no path traversal)
+    and index-prefixed so two uploads sharing a basename can't clobber each other.
     """
     import shutil
     import tempfile
     from pathlib import Path
 
-    from corpus_rag.document_store import build_document_store
-    from corpus_rag.pipelines.indexing import build_indexing_pipeline, run_indexing
-    from corpus_rag.settings import get_settings
+    from corpus_rag.pipelines.indexing import run_indexing
 
-    settings = get_settings()
-    pipeline = build_indexing_pipeline(build_document_store(settings), settings)
-
+    pipeline = _get_ingest_pipeline()
     tmpdir = Path(tempfile.mkdtemp(prefix="corpus_upload_"))
     try:
         paths: list[str] = []
-        for up in uploaded_files:
-            dest = tmpdir / Path(up.name).name  # basename only (no traversal)
+        for i, up in enumerate(uploaded_files):
+            safe = Path(up.name).name or f"upload_{i}"  # basename; fallback if empty
+            dest = tmpdir / f"{i}_{safe}"  # index prefix avoids basename collisions
             dest.write_bytes(up.getvalue())
             paths.append(str(dest))
         result = run_indexing(pipeline, paths)
@@ -97,18 +105,25 @@ def _source_name(meta: dict | None) -> str:
     return origin.get("filename") or "(unknown source)"
 
 
+@st.cache_data(ttl=30, show_spinner=False)
 def _loaded_documents() -> list[tuple[str, int]]:
-    """Distinct source documents currently in the store, with chunk counts."""
-    from collections import Counter
+    """Distinct source documents in the store with chunk counts.
 
-    from corpus_rag.document_store import build_document_store
+    Aggregates in SQL so the whole corpus (and its embeddings) is NOT pulled into
+    the app on every Streamlit rerun — only ``(filename, count)`` rows come back.
+    Cached briefly; ``_loaded_documents.clear()`` after an ingest refreshes it.
+    """
+    import psycopg
+
     from corpus_rag.settings import get_settings
 
-    store = build_document_store(get_settings())
-    counts: Counter[str] = Counter()
-    for doc in store.filter_documents():
-        counts[_source_name(doc.meta)] += 1
-    return sorted(counts.items())
+    sql = (
+        "SELECT COALESCE(meta->'dl_meta'->'origin'->>'filename', '(unknown source)') "
+        "AS name, COUNT(*) AS n FROM haystack_documents GROUP BY name ORDER BY name"
+    )
+    with psycopg.connect(get_settings().pg_conn_str) as conn:
+        rows = conn.execute(sql).fetchall()
+    return [(str(name), int(n)) for name, n in rows]
 
 
 def _render_ingest_sidebar() -> None:
@@ -125,6 +140,7 @@ def _render_ingest_sidebar() -> None:
             try:
                 with st.spinner("Ingesting (convert → chunk → embed → store)…"):
                     written = _ingest_uploads(uploads)
+                _loaded_documents.clear()  # refresh the "Currently Loaded" list
                 st.success(
                     f"Ingested {len(uploads)} file(s) → {written} chunk(s). "
                     "New content is searchable now."
@@ -187,18 +203,29 @@ def main() -> None:
     else:
         st.markdown(answer)
 
-    # §2A.4: sources always co-rendered with the response.
-    st.subheader(f"Sources ({len(sources)})")
     if not sources:
+        st.subheader("Sources (0)")
         st.info("No source chunks retrieved for this query.")
         return
 
-    # Comparison table: rows in rerank order; show how rerank moved each chunk
-    # away from its initial cosine rank (Δ = cosine_rank − rerank_rank; >0 = up).
+    # Split by the grounding floor so the UI never implies a below-threshold chunk
+    # grounded the answer. Only chunks at/above MIN_SCORE are "Sources used"; the
+    # rest are shown separately as retrieval candidates that were NOT used.
+    from corpus_rag.settings import get_settings
+
+    floor = get_settings().min_score
+
+    def _is_grounded(rs) -> bool:
+        return floor <= 0.0 or (rs.cosine_score or 0.0) >= floor
+
+    grounded = [s for s in sources if _is_grounded(s)]
+    below = [s for s in sources if not _is_grounded(s)]
+
+    # Retrieval diagnostics over ALL candidates (how rerank moved each vs cosine).
     st.markdown(
-        "**Reranking vs. cosine order** — rows in rerank order. "
-        "`Δ` = how many places the cross-encoder moved a chunk up (+) or down (−) "
-        "from its cosine rank."
+        "**Retrieval diagnostics — all candidates** (rerank order). "
+        "`Δ` = places the cross-encoder moved a chunk up (+) / down (−) from its "
+        "cosine rank. `Grounded` = at/above the MIN_SCORE floor."
     )
     st.dataframe(
         [
@@ -208,6 +235,7 @@ def main() -> None:
                 "Cosine #": s.cosine_rank,
                 "Cosine score": round(s.cosine_score, 4) if s.cosine_score is not None else None,
                 "Δ": s.cosine_rank - s.rerank_rank,
+                "Grounded": _is_grounded(s),
                 "Source": first_line(s.document.content),
             }
             for s in sources
@@ -216,7 +244,14 @@ def main() -> None:
         hide_index=True,
     )
 
-    for s in sources:
+    # §2A.4: the grounded sources are co-rendered with the response.
+    st.subheader(f"Sources used for grounding ({len(grounded)})")
+    if not grounded:
+        st.info(
+            "No retrieved chunk met the MIN_SCORE grounding floor — the response "
+            "above abstains. Below-threshold candidates are listed separately."
+        )
+    for s in grounded:
         label = (
             f"#{s.rerank_rank} (cosine #{s.cosine_rank})  ·  "
             f"rerank {_fmt(s.rerank_score)}  ·  cosine {_fmt(s.cosine_score)}  ·  "
@@ -227,6 +262,13 @@ def main() -> None:
             st.text(s.document.content)
             st.markdown("**Provenance**")
             st.json(s.document.meta or {})
+
+    if below:
+        with st.expander(
+            f"Other retrieved candidates below MIN_SCORE — NOT used for grounding ({len(below)})"
+        ):
+            for s in below:
+                st.markdown(f"- cosine {_fmt(s.cosine_score)} · {first_line(s.document.content)}")
 
 
 if __name__ == "__main__":

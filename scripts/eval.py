@@ -178,18 +178,20 @@ def main() -> int:
         # _default_query_engine() and reloads the store + embedder a second time.
         query_engine = build_query_engine(store, settings)
 
+        # Run each query's pipeline ONCE (embed+retrieve+generate is expensive),
+        # then derive all three Layer-2 metrics from the cached results.
+        runs = {q: run_query(q, engine=query_engine, settings=settings) for q in queries}
+
         def run_fn(q: str):
-            return run_query(q, engine=query_engine, settings=settings)
+            return runs[q]
 
         abstain = abstention_rate(queries, run_fn)
         faith, n_judged = faithfulness_rate(queries, run_fn, generate_fn)
         faith_str = "n/a (all abstained)" if faith is None else round(faith, 3)
         # Citation coverage over non-abstaining answers.
-        coverages = []
-        for q in queries:
-            ans, docs = run_fn(q)
-            if ans != ABSTENTION_ANSWER:
-                coverages.append(citation_coverage(ans, docs))
+        coverages = [
+            citation_coverage(ans, docs) for ans, docs in runs.values() if ans != ABSTENTION_ANSWER
+        ]
         avg_cov = sum(coverages) / len(coverages) if coverages else 0.0
 
         l2 = [
