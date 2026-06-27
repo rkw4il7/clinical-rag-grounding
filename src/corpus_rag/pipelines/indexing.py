@@ -39,9 +39,10 @@ if TYPE_CHECKING:
 def build_converter(settings: Settings | None = None) -> DocumentConverter:
     """Docling ``DocumentConverter`` with OCR gated by ``OCR_ON``.
 
-    OCR is off by default: text-layer PDFs extract directly, so running OCR on
-    them only adds minutes and noisy empty-result logs. Other formats are
-    unaffected; only the PDF pipeline carries the OCR flag.
+    OCR is on by default — a clinical corpus commonly contains scanned/faxed
+    pages, and missing their text silently is worse than the extra ingest time.
+    Set ``OCR_ON=false`` for born-digital-only corpora to skip image-region OCR
+    (text layers still extract either way). Only the PDF pipeline carries the flag.
     """
     settings = settings or get_settings()
     pdf_options = PdfPipelineOptions(do_ocr=settings.ocr_on)

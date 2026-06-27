@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 from haystack.components.builders import PromptBuilder
 from haystack.components.embedders import SentenceTransformersTextEmbedder
 from haystack.components.generators import OpenAIGenerator
-from haystack.components.rankers import TransformersSimilarityRanker
+from haystack.components.rankers import SentenceTransformersSimilarityRanker
 from haystack.utils import Secret
 from haystack_integrations.components.retrievers.pgvector import (
     PgvectorEmbeddingRetriever,
@@ -186,7 +186,7 @@ class RerankEngine:
 
     text_embedder: SentenceTransformersTextEmbedder
     retriever: PgvectorEmbeddingRetriever
-    ranker: TransformersSimilarityRanker
+    ranker: SentenceTransformersSimilarityRanker
     prompt_builder: PromptBuilder
     generator: OpenAIGenerator
 
@@ -205,7 +205,7 @@ def build_rerank_engine(
         document_store=document_store,
         top_k=settings.rerank_candidates,
     )
-    ranker = TransformersSimilarityRanker(
+    ranker = SentenceTransformersSimilarityRanker(
         model=settings.rerank_model_id,
         top_k=settings.rerank_candidates,
     )

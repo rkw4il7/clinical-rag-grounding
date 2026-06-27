@@ -30,6 +30,11 @@ _FIRST_LINE_MAX = 120
 # formats in scope (root spec.md §3.1, §7.3); extensions only, no leading dot.
 ALLOWED_UPLOAD_TYPES = ["pdf", "docx", "pptx", "html", "htm", "md"]
 
+# Cap total upload size: ingest (esp. OCR, on by default) runs in the Streamlit
+# request handler, so a huge upload would block the worker for minutes/hours.
+MAX_UPLOAD_MB = 50
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
+
 
 def first_line(content: str, max_len: int = _FIRST_LINE_MAX) -> str:
     """Derive the expander label from a chunk's content (root §4.4).
@@ -129,6 +134,10 @@ def _loaded_documents() -> list[tuple[str, int]]:
     Aggregates in SQL so the whole corpus (and its embeddings) is NOT pulled into
     the app on every Streamlit rerun — only ``(filename, count)`` rows come back.
     Cached briefly; ``_loaded_documents.clear()`` after an ingest refreshes it.
+
+    Assumes ``PgvectorDocumentStore``'s default table name (``haystack_documents``);
+    this app exposes no table-name setting. Deriving it from a built store would
+    force an embedding-model load (dimension contract) on every sidebar render.
     """
     import psycopg
 
@@ -154,6 +163,13 @@ def _render_ingest_sidebar() -> None:
             label_visibility="collapsed",
         )
         if uploads and st.button("Ingest uploaded files"):
+            total_bytes = sum(len(f.getvalue()) for f in uploads)
+            if total_bytes > MAX_UPLOAD_BYTES:
+                st.error(
+                    f"Upload too large ({total_bytes // 1024 // 1024} MB); "
+                    f"limit is {MAX_UPLOAD_MB} MB."
+                )
+                return
             try:
                 with st.spinner("Ingesting (convert → chunk → embed → store)…"):
                     written = _ingest_uploads(uploads)
