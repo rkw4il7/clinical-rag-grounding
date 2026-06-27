@@ -28,7 +28,13 @@ def resolve_embedding_dim(model_id: str) -> int:
     from sentence_transformers import SentenceTransformer
 
     model = SentenceTransformer(model_id)
-    dim = model.get_sentence_embedding_dimension()
+    # sentence-transformers 5+ renamed get_sentence_embedding_dimension ->
+    # get_embedding_dimension (the old name now emits a FutureWarning). Prefer the
+    # new name, fall back for older installs.
+    get_dim = (
+        getattr(model, "get_embedding_dimension", None) or model.get_sentence_embedding_dimension
+    )
+    dim = get_dim()
     if not dim or dim < 1:
         raise RuntimeError(f"Embedding model {model_id!r} reported an invalid dimension: {dim!r}")
     return int(dim)
