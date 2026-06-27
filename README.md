@@ -151,3 +151,53 @@ uv run python scripts/eval.py --auto-generate 25   # build a gold set from the c
 written from the chunk it then retrieves), and the faithfulness judge defaults to
 the **same** local model as the generator (self-grading). Treat these as smoke
 signals; use a hand-authored gold set and a separate judge model for real numbers.
+
+## Troubleshooting & hardware
+
+**`[RapidOCR] Using CPU device` on an Apple-Silicon / Metal box — why not the GPU?**
+Expected, not a misconfiguration. RapidOCR (the OCR engine Docling uses for
+scanned PDF pages) runs on its torch backend, whose device selector only checks
+`torch.cuda.is_available()`. Apple's GPU is **MPS**, not CUDA, so the check fails
+and it falls back to CPU; even forced onto MPS, several OCR ops lack MPS kernels
+and silently drop back to CPU. "Auto-GPU" in most ML libs means CUDA — Metal
+support is opt-in and, for RapidOCR, absent. OCR is a one-time **ingest** cost, so
+CPU is usually fine. Options:
+- Born-digital corpus (text layers, no scans)? Set `OCR_ON=false` — RapidOCR never
+  loads, the log disappears, ingest is faster, and text still extracts.
+- Need OCR but want it quiet? `logging.getLogger("RapidOCR").setLevel("WARNING")`.
+- Real OCR GPU acceleration realistically needs a CUDA host.
+
+**Does anything use the Apple GPU, then?** Yes — the embedder and cross-encoder
+reranker (sentence-transformers / torch) are a separate path; Haystack's device
+auto-resolve prefers `cuda → mps → cpu`, so on Apple Silicon they use **MPS**.
+That's the repeated, latency-critical work (every query); OCR is the one-time
+ingest cost. The GPU win is where it matters.
+
+## FAQ (likely reviewer questions)
+
+- **How do you stop the LLM inventing clinical facts?** Two layers. (1) A hard
+  retrieval gate: if no chunk scores at/above `MIN_SCORE` the app abstains
+  *before* the generator runs (`run_query` gates between retrieve and generate) —
+  the model is never called without grounding. (2) A grounding-only prompt:
+  specific clinical claims must come from the retrieved chunks; general reasoning
+  is allowed, parametric specifics are not. See "Why verbatim sources".
+- **Why is `MIN_SCORE` 0.35 by default, not 0?** Fail-safe: at 0.0 the gate is a
+  no-op (retriever always returns `top_k`, generator always runs) and grounding
+  rests on the prompt alone. Non-zero makes the mechanical gate active by default;
+  `build_*_engine` warns if you set it to 0. Tune the exact floor per corpus/model
+  from the eval harness.
+- **Why a general embedding model, not a clinical/biomedical one?** Domain safety
+  here comes from grounding in the uploaded corpus, not from a domain-tuned model.
+  Corpus scope is set at runtime (cardiology today, nephrology tomorrow), so the
+  app stays domain-agnostic and is measured *relative to the uploaded corpus*.
+- **Why JSON qrels, not YAML?** No new dependency, and it matches the existing
+  `CORPUS_SOURCES` JSON convention.
+- **Why does `pytest -m live` show skips?** By design (`-rs` prints reasons):
+  corpus-dependent tests skip on an empty store; the rerank-vs-cosine demo skips
+  when the corpus is too small to expect disagreement. None are failures.
+- **Live vs offline tests?** Offline (`-m "not live"`, run in CI) needs no
+  services — pure logic with fakes. Live (`-m live`) needs Postgres+pgvector + a
+  local LLM and is run manually. CI never requires those.
+- **Is the committed corpus real patient data?** No — synthetic, non-PHI fixtures
+  (`./tests/data/sample-clinical-guideline.{pdf,docx,html}`). See the PHI/safety
+  note above.
