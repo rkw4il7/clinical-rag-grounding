@@ -20,5 +20,7 @@ def quiet_noisy_upstream() -> None:
       cross-encoder truncate over-long inputs internally; the chunk-token budget
       already bounds what we control, so this is informational, not an error.
     """
-    warnings.filterwarnings("ignore", message=r".*tokenizer_kwargs.*")
+    # Scoped to transformers so an unrelated future warning mentioning the same
+    # word elsewhere isn't silently dropped.
+    warnings.filterwarnings("ignore", message=r".*tokenizer_kwargs.*", module=r"transformers.*")
     logging.getLogger("transformers.tokenization_utils_base").setLevel(logging.ERROR)

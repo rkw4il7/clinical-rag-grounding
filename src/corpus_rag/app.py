@@ -25,8 +25,6 @@ from corpus_rag.logging_setup import quiet_noisy_upstream
 from corpus_rag.prompts import ABSTENTION_ANSWER
 from corpus_rag.settings import get_settings
 
-quiet_noisy_upstream()
-
 logger = logging.getLogger(__name__)
 
 _FIRST_LINE_MAX = 120
@@ -47,6 +45,7 @@ UPLOAD_DIR = Path(__file__).resolve().parent.parent.parent / "uploads"
 # other column layout on the page.
 _LOADED_TABLE_CSS = """
 <style>
+/* Targets Streamlit 1.x internal data-testids — revisit on a Streamlit upgrade. */
 /* Collapse Streamlit's vertical gap so the rows form one continuous table. */
 .st-key-loaded-table [data-testid="stVerticalBlock"] { gap: 0 !important; }
 /* Each row: side + bottom borders; top border only on the first so adjacent
@@ -334,6 +333,10 @@ def _render_ingest_sidebar() -> None:
 
 def main() -> None:
     from corpus_rag.pipelines.query import run_query_reranked
+
+    # Quiet benign upstream tokenizer logs — only when the app actually runs, not
+    # on import (so tests that import this module keep their warnings intact).
+    quiet_noisy_upstream()
 
     st.set_page_config(page_title="Corpus RAG Explorer", layout="wide")
     st.title("Corpus RAG Explorer")
