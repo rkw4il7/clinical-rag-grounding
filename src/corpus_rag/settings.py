@@ -8,10 +8,16 @@ JSON-decoded from their env value by pydantic-settings.
 
 from __future__ import annotations
 
+import warnings
 from functools import lru_cache
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Streamlit's per-file ceiling shipped in .streamlit/config.toml. UPLOAD_MAX_MB
+# must stay <= this or Streamlit rejects the upload at its transport layer before
+# the app's own check runs. Kept in sync with that file by convention.
+_STREAMLIT_MAX_UPLOAD_MB = 200
 
 
 class SourceConfig(BaseModel):
@@ -99,6 +105,14 @@ class Settings(BaseSettings):
             raise ValueError("CHUNK_TOKEN_MARGIN must be >= 0")
         if self.upload_max_mb < 1:
             raise ValueError("UPLOAD_MAX_MB must be >= 1")
+        if self.upload_max_mb > _STREAMLIT_MAX_UPLOAD_MB:
+            warnings.warn(
+                f"UPLOAD_MAX_MB={self.upload_max_mb} exceeds Streamlit's "
+                f"maxUploadSize ({_STREAMLIT_MAX_UPLOAD_MB} MB in "
+                ".streamlit/config.toml). Raise [server] maxUploadSize too, or "
+                "Streamlit rejects the upload before the app's check runs.",
+                stacklevel=2,
+            )
         if self.rerank_candidates < 1:
             raise ValueError("RERANK_CANDIDATES must be >= 1")
         if self.llm_timeout < 1:

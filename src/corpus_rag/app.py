@@ -22,6 +22,7 @@ from pathlib import Path
 import streamlit as st
 
 from corpus_rag.prompts import ABSTENTION_ANSWER
+from corpus_rag.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,6 @@ def _get_engine():
     """
     from corpus_rag.document_store import build_document_store
     from corpus_rag.pipelines.query import build_rerank_engine
-    from corpus_rag.settings import get_settings
 
     settings = get_settings()
     return build_rerank_engine(build_document_store(settings), settings)
@@ -96,7 +96,6 @@ def _get_ingest_pipeline():
     """Build the Docling → embed → write pipeline once (the embedder is heavy)."""
     from corpus_rag.document_store import build_document_store
     from corpus_rag.pipelines.indexing import build_indexing_pipeline
-    from corpus_rag.settings import get_settings
 
     settings = get_settings()
     return build_indexing_pipeline(build_document_store(settings), settings)
@@ -114,7 +113,6 @@ def _ensure_store_ready() -> bool:
     soft error if the store is unreachable.
     """
     from corpus_rag.document_store import build_document_store
-    from corpus_rag.settings import get_settings
 
     build_document_store(get_settings())
     return True
@@ -196,8 +194,6 @@ def _loaded_documents() -> list[tuple[str, int]]:
     """
     import psycopg
 
-    from corpus_rag.settings import get_settings
-
     sql = (
         f"SELECT {_SOURCE_NAME_SQL} AS name, COUNT(*) AS n "
         "FROM haystack_documents GROUP BY name ORDER BY name"
@@ -222,8 +218,6 @@ def _unload_document(name: str) -> int:
     """
     import psycopg
 
-    from corpus_rag.settings import get_settings
-
     sql = f"DELETE FROM haystack_documents WHERE {_SOURCE_NAME_SQL} = %s"
     with psycopg.connect(get_settings().pg_conn_str) as conn:
         removed = conn.execute(sql, (name,)).rowcount
@@ -236,16 +230,13 @@ def _unload_document(name: str) -> int:
 
 
 def _render_ingest_sidebar() -> None:
-    from corpus_rag.settings import get_settings
-
     cap_mb = get_settings().upload_max_mb
     cap_bytes = cap_mb * 1024 * 1024
 
     with st.sidebar:
         st.header("Documents")
         st.caption(
-            f"Upload to ingest ({', '.join(ALLOWED_UPLOAD_TYPES)}). "
-            f"File Size Limit: {cap_mb} MB"
+            f"Upload to ingest ({', '.join(ALLOWED_UPLOAD_TYPES)}). File Size Limit: {cap_mb} MB"
         )
 
         # Surface the result of the just-completed ingest. It is stashed in
@@ -270,8 +261,7 @@ def _render_ingest_sidebar() -> None:
             if total_bytes > cap_bytes:
                 st.session_state["ingest_msg"] = (
                     "err",
-                    f"Upload too large ({total_bytes // 1024 // 1024} MB); "
-                    f"limit is {cap_mb} MB.",
+                    f"Upload too large ({total_bytes // 1024 // 1024} MB); limit is {cap_mb} MB.",
                 )
             else:
                 try:

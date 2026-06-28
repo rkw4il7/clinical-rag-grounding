@@ -122,3 +122,9 @@ def test_invalid_llm_timeout_rejected(clean_env) -> None:
     clean_env.setenv("LLM_TIMEOUT", "0")
     with pytest.raises(ValueError, match="LLM_TIMEOUT"):
         _settings()
+
+
+def test_invalid_upload_max_mb_rejected(clean_env) -> None:
+    clean_env.setenv("UPLOAD_MAX_MB", "0")
+    with pytest.raises(ValueError, match="UPLOAD_MAX_MB"):
+        _settings()

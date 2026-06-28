@@ -1,5 +1,5 @@
-# Streamlit's hard ceiling for a single uploaded file (MB). Set high so the real,
-# tunable limit is the app's UPLOAD_MAX_MB (.env, default 200) — Streamlit only
-# needs to allow at least that. Raise this too if you push UPLOAD_MAX_MB above it.
+# Streamlit's per-file ceiling (MB). Kept equal to the app's UPLOAD_MAX_MB default
+# (200) so the uploader's built-in "Limit … per file" text matches the app cap.
+# To allow larger uploads, raise BOTH this and UPLOAD_MAX_MB (.env).
 [server]
-maxUploadSize = 1024
+maxUploadSize = 200
