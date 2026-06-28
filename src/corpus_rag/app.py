@@ -238,103 +238,105 @@ def _unload_document(name: str) -> int:
 @st.fragment
 def _render_ingest_sidebar() -> None:
     # A fragment so submitting a query (which runs the slow retrieve→rerank→
-    # generate in the main area) does NOT re-execute/re-stream this sidebar — that
+    # generate in the main area) does NOT re-execute/re-stream this section — that
     # re-stream was rendering the "Sources Currently Loaded" table a second time
     # while generation was in flight. Upload/unload below call st.rerun() for a
     # full refresh when the corpus actually changes.
+    #
+    # NOTE: fragments cannot call st.sidebar themselves — the caller wraps this in
+    # `with st.sidebar:` (see main()).
     cap_mb = get_settings().upload_max_mb
     cap_bytes = cap_mb * 1024 * 1024
 
-    with st.sidebar:
-        st.header("Documents")
-        st.caption(
-            f"Upload to ingest ({', '.join(ALLOWED_UPLOAD_TYPES)}). File Size Limit: {cap_mb} MB"
-        )
+    st.header("Documents")
+    st.caption(
+        f"Upload to ingest ({', '.join(ALLOWED_UPLOAD_TYPES)}). File Size Limit: {cap_mb} MB"
+    )
 
-        # Surface the result of the just-completed ingest. It is stashed in
-        # session_state because we rerun (to reset the uploader) right after.
-        prior = st.session_state.pop("ingest_msg", None)
-        if prior:
-            level, text = prior
-            (st.success if level == "ok" else st.error)(text)
+    # Surface the result of the just-completed ingest. It is stashed in
+    # session_state because we rerun (to reset the uploader) right after.
+    prior = st.session_state.pop("ingest_msg", None)
+    if prior:
+        level, text = prior
+        (st.success if level == "ok" else st.error)(text)
 
-        # Rotating key: bumping it after an ingest gives a fresh, empty uploader
-        # on the next run, so the widget returns to its pre-upload state.
-        round_ = st.session_state.setdefault("upload_round", 0)
-        uploads = st.file_uploader(
-            "Drag Files Here...",
-            type=ALLOWED_UPLOAD_TYPES,
-            accept_multiple_files=True,
-            key=f"uploader_{round_}",
-        )
-        # Ingest immediately on upload — no separate button (it is implied).
-        if uploads:
-            total_bytes = sum(len(f.getvalue()) for f in uploads)
-            if total_bytes > cap_bytes:
+    # Rotating key: bumping it after an ingest gives a fresh, empty uploader
+    # on the next run, so the widget returns to its pre-upload state.
+    round_ = st.session_state.setdefault("upload_round", 0)
+    uploads = st.file_uploader(
+        "Drag Files Here...",
+        type=ALLOWED_UPLOAD_TYPES,
+        accept_multiple_files=True,
+        key=f"uploader_{round_}",
+    )
+    # Ingest immediately on upload — no separate button (it is implied).
+    if uploads:
+        total_bytes = sum(len(f.getvalue()) for f in uploads)
+        if total_bytes > cap_bytes:
+            st.session_state["ingest_msg"] = (
+                "err",
+                f"Upload too large ({total_bytes // 1024 // 1024} MB); limit is {cap_mb} MB.",
+            )
+        else:
+            try:
+                with st.spinner("Ingesting (convert → chunk → embed → store)…"):
+                    written = _ingest_uploads(uploads)
+                _loaded_documents.clear()  # refresh the "Currently Loaded" list
+                st.session_state["ingest_msg"] = (
+                    "ok",
+                    f"Ingested {len(uploads)} file(s) → {written} chunk(s). Searchable now.",
+                )
+            except Exception:  # noqa: BLE001 — generic message; detail to logs
+                logger.exception("Ingest failed")
                 st.session_state["ingest_msg"] = (
                     "err",
-                    f"Upload too large ({total_bytes // 1024 // 1024} MB); limit is {cap_mb} MB.",
+                    "Ingest failed. Check the server logs for details.",
                 )
-            else:
+        st.session_state["upload_round"] = round_ + 1  # reset the uploader
+        st.rerun()
+
+    st.subheader("Sources Currently Loaded")
+    # Create the store table on a fresh DB so the corpus is usable with zero
+    # prior ingest; tolerate the store being unreachable.
+    try:
+        _ensure_store_ready()
+        loaded = _loaded_documents()
+    except Exception:  # noqa: BLE001 — store may be down; don't crash the page
+        logger.exception("Listing loaded documents failed")
+        st.caption("Could not reach the vector store.")
+        return
+    if not loaded:
+        st.caption("No documents ingested yet.")
+        return
+
+    # Table: Delete | Source | Chunks, dark-blue bordered (CSS scoped to key).
+    st.markdown(_LOADED_TABLE_CSS, unsafe_allow_html=True)
+    widths = [0.22, 0.56, 0.22]
+    with st.container(key="loaded-table"):
+        head = st.columns(widths)
+        head[0].markdown("**Delete**")
+        head[1].markdown("**Source**")
+        head[2].markdown("**Chunks**")
+        for name, n in loaded:
+            row = st.columns(widths)
+            clicked = row[0].button("✕", key=f"unload_{name}", help=f"Remove {name}")
+            row[1].write(name)
+            row[2].write(str(n))
+            if clicked:
                 try:
-                    with st.spinner("Ingesting (convert → chunk → embed → store)…"):
-                        written = _ingest_uploads(uploads)
-                    _loaded_documents.clear()  # refresh the "Currently Loaded" list
+                    removed = _unload_document(name)
+                    _loaded_documents.clear()
                     st.session_state["ingest_msg"] = (
                         "ok",
-                        f"Ingested {len(uploads)} file(s) → {written} chunk(s). Searchable now.",
+                        f"Removed {name} ({removed} chunk(s)).",
                     )
                 except Exception:  # noqa: BLE001 — generic message; detail to logs
-                    logger.exception("Ingest failed")
+                    logger.exception("Unload failed")
                     st.session_state["ingest_msg"] = (
                         "err",
-                        "Ingest failed. Check the server logs for details.",
+                        "Remove failed. Check the server logs for details.",
                     )
-            st.session_state["upload_round"] = round_ + 1  # reset the uploader
-            st.rerun()
-
-        st.subheader("Sources Currently Loaded")
-        # Create the store table on a fresh DB so the corpus is usable with zero
-        # prior ingest; tolerate the store being unreachable.
-        try:
-            _ensure_store_ready()
-            loaded = _loaded_documents()
-        except Exception:  # noqa: BLE001 — store may be down; don't crash the page
-            logger.exception("Listing loaded documents failed")
-            st.caption("Could not reach the vector store.")
-            return
-        if not loaded:
-            st.caption("No documents ingested yet.")
-            return
-
-        # Table: Delete | Source | Chunks, dark-blue bordered (CSS scoped to key).
-        st.markdown(_LOADED_TABLE_CSS, unsafe_allow_html=True)
-        widths = [0.22, 0.56, 0.22]
-        with st.container(key="loaded-table"):
-            head = st.columns(widths)
-            head[0].markdown("**Delete**")
-            head[1].markdown("**Source**")
-            head[2].markdown("**Chunks**")
-            for name, n in loaded:
-                row = st.columns(widths)
-                clicked = row[0].button("✕", key=f"unload_{name}", help=f"Remove {name}")
-                row[1].write(name)
-                row[2].write(str(n))
-                if clicked:
-                    try:
-                        removed = _unload_document(name)
-                        _loaded_documents.clear()
-                        st.session_state["ingest_msg"] = (
-                            "ok",
-                            f"Removed {name} ({removed} chunk(s)).",
-                        )
-                    except Exception:  # noqa: BLE001 — generic message; detail to logs
-                        logger.exception("Unload failed")
-                        st.session_state["ingest_msg"] = (
-                            "err",
-                            "Remove failed. Check the server logs for details.",
-                        )
-                    st.rerun()
+                st.rerun()
 
 
 def main() -> None:
@@ -347,7 +349,9 @@ def main() -> None:
     st.set_page_config(page_title="Corpus RAG Explorer", layout="wide")
     st.title("Corpus RAG Explorer")
 
-    _render_ingest_sidebar()
+    # Fragments cannot call st.sidebar internally, so put it on the sidebar here.
+    with st.sidebar:
+        _render_ingest_sidebar()
 
     query = st.chat_input("Ask a question about the corpus")
     if not query:
