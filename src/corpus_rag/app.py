@@ -235,7 +235,13 @@ def _unload_document(name: str) -> int:
     return int(removed)
 
 
+@st.fragment
 def _render_ingest_sidebar() -> None:
+    # A fragment so submitting a query (which runs the slow retrieve→rerank→
+    # generate in the main area) does NOT re-execute/re-stream this sidebar — that
+    # re-stream was rendering the "Sources Currently Loaded" table a second time
+    # while generation was in flight. Upload/unload below call st.rerun() for a
+    # full refresh when the corpus actually changes.
     cap_mb = get_settings().upload_max_mb
     cap_bytes = cap_mb * 1024 * 1024
 
