@@ -99,31 +99,31 @@ LLM_MODEL=your-model-name
 CORPUS_SOURCES=[{"adapter": "local_path", "root": "tests/data/**/*"}]
 ```
 
-### 4. Ingest a corpus
-Put your documents where `CORPUS_SOURCES` points (PDF, DOCX, HTML, …), then:
-```bash
-uv run corpus-rag ingest          # add --reset to recreate the table
-```
-
-A tiny **synthetic sample** ships in the repo in three formats —
-`./tests/data/sample-clinical-guideline.{pdf,docx,html}` — so a fresh clone
-always has something to ingest, chunk, and process (and so the mixed-format
-PDF+DOCX+HTML claim is backed by real fixtures). It is generated, non-PHI,
-common-knowledge reference text (two headed sections); regenerate all three with
-`uv run python scripts/make_sample_corpus.py`. Real or licensed corpora are
-gitignored — drop them in `./tests/data/` and they'll be picked up too.
-
-With the default `.env` (below) `CORPUS_SOURCES` already points at
-`tests/data/**/*`, so out of the box `uv run corpus-rag ingest` indexes that
-sample. To make `.env` work you only need: a reachable `PG_CONN_STR`
-(Postgres + pgvector), and `LLM_BASE_URL` / `LLM_MODEL` pointing at a running
-local OpenAI-compatible server. The embedding model (`EMBED_MODEL_ID`) downloads
-automatically on first run.
-
-### 5. Run the app
+### 4. Run the app and ingest from the GUI
+The app starts against an **empty database** — it creates the store table on
+launch, so no prior ingest is required. Loading documents is a first-class GUI
+action: open the app, use the sidebar **"Documents"** uploader (PDF, DOCX, PPTX,
+HTML, MD) to ingest at runtime, and remove any document with its **✕**.
 ```bash
 uv run streamlit run src/corpus_rag/app.py
 ```
+To make `.env` work you only need a reachable `PG_CONN_STR` (Postgres + pgvector)
+and `LLM_BASE_URL` / `LLM_MODEL` pointing at a running local OpenAI-compatible
+server. The embedding model (`EMBED_MODEL_ID`) downloads automatically on first run.
+
+#### Optional: batch ingest from the CLI
+For scripted/CI loads (or to seed the bundled sample), ingest the configured
+`CORPUS_SOURCES` from the command line — the same pipeline as the GUI:
+```bash
+uv run corpus-rag ingest          # add --reset to recreate the table
+```
+A tiny **synthetic sample** ships in three formats —
+`./tests/data/sample-clinical-guideline.{pdf,docx,html}` — so a fresh clone has
+something to ingest (and the mixed-format PDF+DOCX+HTML claim is backed by real
+fixtures). It is generated, non-PHI, common-knowledge text; regenerate with
+`uv run python scripts/make_sample_corpus.py`. The default `CORPUS_SOURCES` points
+at `tests/data/**/*`. Real/licensed corpora are gitignored — drop them in
+`./tests/data/` (or just upload via the GUI).
 
 ## Testing
 
