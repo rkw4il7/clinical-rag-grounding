@@ -496,17 +496,17 @@ def main() -> None:
     with st.sidebar:
         _render_ingest_sidebar()
 
-    # Hide the input while a query is in flight: submitting stashes the query and
-    # reruns, so the busy run renders the status (no input) instead. The input
-    # returns once the response is stored. (No Cancel control — Streamlit is
-    # synchronous, so it could not abort the in-flight model call anyway.)
-    pending = st.session_state.get("pending_query")
-    if pending is None:
-        typed = st.chat_input("Ask a question...")
-        if typed:
-            st.session_state["pending_query"] = typed
-            st.rerun()
-    else:
+    # Host the input in a placeholder so it can be HIDDEN the moment a query is
+    # submitted. Capturing and processing the query happen in the SAME run, and
+    # input_slot.empty() is called BEFORE the slow work — that removal flushes to
+    # the browser immediately, so the input is gone for the whole retrieve→rerank
+    # →generate wait (a stale widget from a prior run would otherwise linger until
+    # the run finished). st.rerun() at the end brings the input back with the result.
+    input_slot = st.empty()
+    query = input_slot.chat_input("Ask a question...")
+    if query:
+        input_slot.empty()  # hide the input for the duration of the query
+
         # Resolve the engine FIRST, OUTSIDE the status placeholder. On a fresh
         # process the @st.cache_resource model-load spinner fires here; doing it
         # before the status line means that spinner and our status never stack as
@@ -515,10 +515,9 @@ def main() -> None:
         engine = _get_engine()
 
         # One status line, in a placeholder we clear at the end so it shows ONLY
-        # while working and leaves no leftover box in the final state. Its label is
-        # driven by the pipeline's progress callback, so an answer being extended
-        # shows "Extending response…" rather than looking frozen between the model
-        # round-trips. No separate streamed-text preview (that was the second line).
+        # while working. Its label is driven by the pipeline's progress callback, so
+        # an answer being extended shows "Extending response…" rather than looking
+        # frozen between the model round-trips.
         status_area = st.empty()
         try:
             status = status_area.status("Starting RAG query…", expanded=False)
@@ -528,14 +527,14 @@ def main() -> None:
                 status.update(label=message)
 
             answer, sources = run_query_reranked(
-                pending,
+                query,
                 engine=engine,
                 progress=show_query_progress,
                 finish_reason_callback=finish_reasons.append,
             )
-            status_area.empty()  # remove the status box; the answer renders below
+            status_area.empty()
             st.session_state["rag_result"] = {
-                "query": pending,
+                "query": query,
                 "answer": answer,
                 "sources": sources,
                 "finish_reason": finish_reasons[0] if finish_reasons else None,
@@ -545,11 +544,9 @@ def main() -> None:
             # can embed the connection string (credentials) or other internals.
             logger.exception("Query failed")
             status_area.empty()
-            st.session_state["pending_query"] = None
             st.error("Query failed. Check the server logs for details.")
             return
-        # Restore the input on the next run and render the freshly stored result.
-        st.session_state["pending_query"] = None
+        # Rerun so the input returns (and the freshly stored result renders below).
         st.rerun()
 
     result = st.session_state.get("rag_result")
