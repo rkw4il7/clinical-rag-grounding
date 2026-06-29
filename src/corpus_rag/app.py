@@ -401,14 +401,21 @@ def main() -> None:
 
     query = st.chat_input("Ask a question about the corpus")
     if query:
+        # Resolve the engine FIRST, OUTSIDE the status placeholder. On a fresh
+        # process the @st.cache_resource model-load spinner fires here; doing it
+        # before the status line means that spinner and our status never stack as
+        # two status lines (the original "two status lines" bug). Cached after the
+        # first query, so this is a no-op spinner thereafter.
+        engine = _get_engine()
+
+        # One status line, in a placeholder we clear at the end so it shows ONLY
+        # while working and leaves no leftover box in the final state. Its label is
+        # driven by the pipeline's progress callback, so an answer being extended
+        # shows "Extending response…" rather than looking frozen between the model
+        # round-trips. No separate streamed-text preview (that was the second line).
+        status_area = st.empty()
         try:
-            # Single status line for the WHOLE query, including auto-continuation
-            # rounds. Its label is driven by the pipeline's progress callback, so a
-            # length-truncated answer being extended shows "Extending response…"
-            # instead of looking frozen between model round-trips. No separate
-            # streamed-text preview (that read as a confusing second status line);
-            # the finished answer renders once below.
-            status = st.status("Starting RAG query…", expanded=False)
+            status = status_area.status("Starting RAG query…", expanded=False)
             finish_reasons: list[str | None] = []
 
             def show_query_progress(message: str) -> None:
@@ -416,11 +423,11 @@ def main() -> None:
 
             answer, sources = run_query_reranked(
                 query,
-                engine=_get_engine(),
+                engine=engine,
                 progress=show_query_progress,
                 finish_reason_callback=finish_reasons.append,
             )
-            status.update(label="Response ready", state="complete")
+            status_area.empty()  # remove the status box; the answer renders below
             st.session_state["rag_result"] = {
                 "query": query,
                 "answer": answer,
@@ -431,8 +438,7 @@ def main() -> None:
             # Never surface raw exception text in a clinical-facing UI: DB/LLM errors
             # can embed the connection string (credentials) or other internals.
             logger.exception("Query failed")
-            # Settle the spinner: otherwise st.status stays animated "running".
-            status.update(label="Query failed", state="error")
+            status_area.empty()
             st.error("Query failed. Check the server logs for details.")
             return
 
