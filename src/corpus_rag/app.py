@@ -443,7 +443,7 @@ def main() -> None:
     with st.sidebar:
         _render_ingest_sidebar()
 
-    query = st.chat_input("Ask a question about the corpus")
+    query = st.chat_input("Ask a question...")
     if query:
         # Resolve the engine FIRST, OUTSIDE the status placeholder. On a fresh
         # process the @st.cache_resource model-load spinner fires here; doing it
