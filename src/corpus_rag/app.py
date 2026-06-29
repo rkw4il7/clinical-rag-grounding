@@ -402,20 +402,26 @@ def main() -> None:
     query = st.chat_input("Ask a question about the corpus")
     if query:
         try:
-            query_progress = st.empty()
-            query_progress.info("Starting RAG query...")
+            # st.status keeps an animated spinner for the WHOLE query, including
+            # the auto-continuation rounds. Its label is driven by the pipeline's
+            # progress callback, so a length-truncated answer being extended shows
+            # "Generating more of the response…" instead of looking frozen between
+            # the model round-trips (which do not stream while a turn is in flight).
+            status = st.status("Starting RAG query…", expanded=False)
             response_preview = st.empty()
             streamed_answer: list[str] = []
             finish_reasons: list[str | None] = []
 
             def show_query_progress(message: str) -> None:
-                query_progress.info(message)
+                status.update(label=message)
 
             def show_generation_progress(text: str) -> None:
                 if not text:
                     return
                 streamed_answer.append(text)
-                response_preview.markdown("".join(streamed_answer))
+                # Trailing marker signals the answer is still being written, so a
+                # short first segment does not read as a finished (truncated) reply.
+                response_preview.markdown("".join(streamed_answer) + " ▌")
 
             answer, sources = run_query_reranked(
                 query,
@@ -424,7 +430,7 @@ def main() -> None:
                 generation_progress=show_generation_progress,
                 finish_reason_callback=finish_reasons.append,
             )
-            query_progress.success("RAG response ready")
+            status.update(label="Response ready", state="complete")
             response_preview.empty()
             st.session_state["rag_result"] = {
                 "query": query,
@@ -436,6 +442,8 @@ def main() -> None:
             # Never surface raw exception text in a clinical-facing UI: DB/LLM errors
             # can embed the connection string (credentials) or other internals.
             logger.exception("Query failed")
+            # Settle the spinner: otherwise st.status stays animated "running".
+            status.update(label="Query failed", state="error")
             st.error("Query failed. Check the server logs for details.")
             return
 
