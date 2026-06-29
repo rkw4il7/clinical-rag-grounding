@@ -122,6 +122,25 @@ def test_run_query_abstains_when_generator_empty() -> None:
     assert returned == docs
 
 
+def test_run_query_auto_continues_truncated_answer() -> None:
+    """run_query has parity with run_query_reranked: length truncation continues."""
+    docs = [Document(content="a", score=0.9)]
+    engine = _mock_engine(docs, reply="unused")
+    engine.generator.run.side_effect = [
+        {"replies": ["part one "], "meta": [{"finish_reason": "length"}]},
+        {"replies": ["part two."], "meta": [{"finish_reason": "stop"}]},
+    ]
+    finish_reasons = []
+
+    answer, _ = run_query(
+        "q", engine=engine, settings=_settings(), finish_reason_callback=finish_reasons.append
+    )
+
+    assert answer == "part one part two."
+    assert finish_reasons == ["stop"]
+    assert engine.generator.run.call_count == 2
+
+
 # --- reranking -----------------------------------------------------------
 
 
@@ -286,7 +305,7 @@ def test_rerank_reports_finish_reason() -> None:
     engine = _rerank_engine([a], [(a, 0.95)], reply="from sources")
     engine.generator.run.return_value = {
         "replies": ["from sources"],
-        "meta": [{"finish_reason": "length"}],
+        "meta": [{"finish_reason": "stop"}],
     }
     finish_reasons = []
 
@@ -297,7 +316,55 @@ def test_rerank_reports_finish_reason() -> None:
         finish_reason_callback=finish_reasons.append,
     )
 
-    assert finish_reasons == ["length"]
+    assert finish_reasons == ["stop"]
+
+
+def test_rerank_auto_continues_until_model_stops() -> None:
+    """A length-truncated answer is transparently continued, then stitched."""
+    a = Document(content="aaa", score=0.9)
+    engine = _rerank_engine([a], [(a, 0.95)], reply="unused")
+    engine.generator.run.side_effect = [
+        {"replies": ["part one "], "meta": [{"finish_reason": "length"}]},
+        {"replies": ["part two."], "meta": [{"finish_reason": "stop"}]},
+    ]
+    finish_reasons = []
+
+    answer, _ = run_query_reranked(
+        "q",
+        engine=engine,
+        settings=_settings(),
+        finish_reason_callback=finish_reasons.append,
+    )
+
+    assert answer == "part one part two."  # stitched across turns
+    assert finish_reasons == ["stop"]  # only the FINAL reason is reported
+    assert engine.generator.run.call_count == 2
+    # Continuation grounds on the same chunk via the continuation template.
+    cont_prompt = engine.generator.run.call_args.kwargs["prompt"]
+    assert "part one" in cont_prompt  # prior answer fed back as PARTIAL ANSWER
+
+
+def test_rerank_auto_continue_respects_round_cap() -> None:
+    """Persistent length truncation stops at MAX_CONTINUATION_ROUNDS, not forever."""
+    a = Document(content="aaa", score=0.9)
+    engine = _rerank_engine([a], [(a, 0.95)], reply="unused")
+    engine.generator.run.return_value = {
+        "replies": ["seg "],
+        "meta": [{"finish_reason": "length"}],
+    }
+    finish_reasons = []
+
+    answer, _ = run_query_reranked(
+        "q",
+        engine=engine,
+        settings=_settings(max_continuation_rounds=2),
+        finish_reason_callback=finish_reasons.append,
+    )
+
+    # Initial generation + exactly 2 continuation rounds (the cap).
+    assert engine.generator.run.call_count == 3
+    assert answer == "seg seg seg "
+    assert finish_reasons == ["length"]  # still truncated; surfaced to the UI
 
 
 def test_continue_reranked_answer_uses_grounded_sources_only() -> None:
@@ -482,7 +549,7 @@ def test_live_rerank_returns_candidates_with_both_rankings() -> None:
     """Top RERANK_CANDIDATES surfaced, each with cosine + rerank rank/score."""
     engine, store, settings = _live_rerank_engine_and_store()
     _, sources = run_query_reranked(
-        "What does the guideline recommend?", engine=engine, settings=settings
+        _corpus_answerable_query(store, settings), engine=engine, settings=settings
     )
 
     expected = min(settings.rerank_candidates, store.count_documents())

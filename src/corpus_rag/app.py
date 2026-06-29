@@ -187,13 +187,22 @@ def _score_str(score: float | None) -> str:
 
 
 def _answer_may_be_incomplete(answer: str, finish_reason: str | None) -> bool:
-    """Detect visible truncation even when a local backend reports no length stop."""
+    """Detect a truncated answer the auto-continuation could not finish.
+
+    ``finish_reason == "length"`` means the round cap was hit (still truncated).
+    A clean ``"stop"`` is TRUSTED — the model chose to end, so no punctuation
+    second-guessing (that produced false positives on answers ending in a word).
+    Only when the backend reports no finish reason at all do we fall back to the
+    mid-sentence heuristic, since such backends never signal length truncation.
+    """
     stripped = answer.rstrip()
     if not stripped or stripped == ABSTENTION_ANSWER:
         return False
     if finish_reason == "length":
         return True
-    if finish_reason not in (None, "stop"):
+    if finish_reason == "stop":
+        return False
+    if finish_reason is not None:
         return True
     return not stripped.endswith(_COMPLETE_ANSWER_ENDINGS)
 
@@ -377,7 +386,7 @@ def _render_ingest_sidebar() -> None:
 
 
 def main() -> None:
-    from corpus_rag.pipelines.query import continue_reranked_answer, run_query_reranked
+    from corpus_rag.pipelines.query import run_query_reranked
 
     # Quiet benign upstream tokenizer logs — only when the app actually runs, not
     # on import (so tests that import this module keep their warnings intact).
@@ -443,42 +452,14 @@ def main() -> None:
     st.write("**Query:**", query)
 
     st.subheader("Response")
+    # Length-truncated answers are now continued automatically inside the query
+    # pipeline (transparent to the user). If one is STILL incomplete here, the
+    # continuation cap was hit — surface a passive note, no manual action.
     if _answer_may_be_incomplete(answer, finish_reason):
         st.warning(
-            "The response appears incomplete. Use Continue response to request the "
-            "next grounded segment. If this repeats, increase LLM_MAX_TOKENS for "
-            "longer single-pass answers."
+            "The response may still be incomplete after automatic continuation. "
+            "Increase LLM_MAX_TOKENS or MAX_CONTINUATION_ROUNDS for longer answers."
         )
-        if st.button("Continue response", type="secondary"):
-            try:
-                continue_status = st.status("Continuing response...", expanded=True)
-                continuation_preview = st.empty()
-                continuation_chunks: list[str] = []
-                continuation_finish: list[str | None] = []
-
-                def show_continuation_progress(text: str) -> None:
-                    if not text:
-                        return
-                    continuation_chunks.append(text)
-                    continuation_preview.markdown(answer + "".join(continuation_chunks))
-
-                continuation = continue_reranked_answer(
-                    query,
-                    answer,
-                    sources,
-                    engine=_get_engine(),
-                    generation_progress=show_continuation_progress,
-                    finish_reason_callback=continuation_finish.append,
-                )
-                continue_status.update(label="Continuation ready", state="complete")
-                continuation_preview.empty()
-                answer = answer + continuation
-                finish_reason = continuation_finish[0] if continuation_finish else None
-                result.update({"answer": answer, "finish_reason": finish_reason})
-                st.rerun()
-            except Exception:  # noqa: BLE001 — generic UI, detail to logs
-                logger.exception("Continuation failed")
-                st.error("Continuation failed. Check the server logs for details.")
     if answer == ABSTENTION_ANSWER:
         st.warning(answer)
     else:

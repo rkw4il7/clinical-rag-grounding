@@ -45,6 +45,10 @@ QUESTION: {{ query }}
 ANSWER:""".replace("__ABSTENTION__", ABSTENTION_ANSWER)
 
 
+# Jinja2 template for Haystack PromptBuilder (NOT str.replace): rendering through
+# the same engine as RAG_PROMPT_TEMPLATE inserts source/query/partial-answer text
+# as literal variable VALUES, so corpus or query text that happens to contain a
+# placeholder token cannot corrupt the prompt structure (no injection).
 CONTINUE_RAG_PROMPT_TEMPLATE = """\
 You are a clinical corpus assistant. Continue the PREVIOUS ANSWER using ONLY the
 RETRIEVED SOURCES below, plus basic, non-specific clinical concepts as connective
@@ -60,11 +64,14 @@ Hard rules:
 - Return only the continuation text.
 
 RETRIEVED SOURCES (most relevant first):
-__SOURCES__
+{% for doc in documents %}
+[Source {{ loop.index }}]
+{{ doc.content }}
+{% endfor %}
 
-QUESTION: __QUESTION__
+QUESTION: {{ query }}
 
 PREVIOUS ANSWER:
-__PARTIAL_ANSWER__
+{{ partial_answer }}
 
 CONTINUATION:"""

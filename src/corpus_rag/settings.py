@@ -91,6 +91,10 @@ class Settings(BaseSettings):
     # Maximum generated answer tokens. Set explicitly so local OpenAI-compatible
     # servers do not silently use a low default and cut responses off mid-sentence.
     llm_max_tokens: int = 4096
+    # Cap on automatic continuation turns when a length-truncated answer is
+    # transparently resumed from the same grounded chunks. Bounds worst-case cost
+    # (each round can emit up to llm_max_tokens) while letting long summaries finish.
+    max_continuation_rounds: int = 8
 
     # Corpus origins: JSON array of {adapter, root|url, ...} objects.
     corpus_sources: list[SourceConfig] = Field(default_factory=list)
@@ -126,6 +130,8 @@ class Settings(BaseSettings):
             raise ValueError("RERANK_CANDIDATES must be >= 1")
         if self.llm_timeout < 1:
             raise ValueError("LLM_TIMEOUT must be >= 1 (seconds)")
+        if self.max_continuation_rounds < 0:
+            raise ValueError("MAX_CONTINUATION_ROUNDS must be >= 0")
         if self.llm_max_tokens < 1:
             raise ValueError("LLM_MAX_TOKENS must be >= 1")
         return self

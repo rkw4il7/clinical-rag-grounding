@@ -79,6 +79,82 @@ def _generated_reply(result: dict, streamed_chunks: list[str]) -> str:
     return max(candidates, key=len)
 
 
+@lru_cache(maxsize=1)
+def _continuation_prompt_builder() -> PromptBuilder:
+    """Cached builder for the continuation template (Jinja, not str.replace).
+
+    Rendering through Jinja inserts source/query/partial-answer text as literal
+    variable VALUES, so corpus or query text containing a placeholder token can
+    never corrupt the prompt — closes the str.replace injection vector.
+    """
+    return PromptBuilder(
+        template=CONTINUE_RAG_PROMPT_TEMPLATE,
+        required_variables=["documents", "query", "partial_answer"],
+    )
+
+
+def _continue_from_docs(
+    engine,
+    query: str,
+    partial_answer: str,
+    grounded_docs: list[Document],
+    *,
+    generation_progress: GenerationProgress | None = None,
+) -> tuple[str, str | None]:
+    """Generate one continuation segment grounded in the SAME source chunks.
+
+    Returns ``(continuation_text, finish_reason)``. Deliberately reuses the
+    already-grounded chunks (no fresh retrieval) so the continuation's safety
+    boundary is identical to the original answer's.
+    """
+    prompt = _continuation_prompt_builder().run(
+        documents=grounded_docs, query=query, partial_answer=partial_answer
+    )["prompt"]
+    streaming_callback, streamed_chunks = _generation_callbacks(generation_progress)
+    result = engine.generator.run(prompt=prompt, streaming_callback=streaming_callback)
+    return _generated_reply(result, streamed_chunks), _first_finish_reason(result)
+
+
+def _complete_truncated_answer(
+    engine,
+    query: str,
+    answer: str,
+    finish_reason: str | None,
+    grounded_docs: list[Document],
+    *,
+    max_rounds: int,
+    progress: QueryProgress | None = None,
+    generation_progress: GenerationProgress | None = None,
+) -> tuple[str, str | None]:
+    """Loop continuation turns until the model stops naturally or the cap is hit.
+
+    A length-truncated answer (``finish_reason == "length"``) is continued from
+    the same grounded chunks, appending each segment, until the generator reports
+    a non-length stop or ``max_rounds`` is reached. Transparent to the caller:
+    only the final, stitched answer and its final finish reason are returned.
+    """
+    rounds = 0
+    while finish_reason == "length" and rounds < max_rounds:
+        rounds += 1
+        if progress:
+            progress(f"Extending response (continuation {rounds} of up to {max_rounds})")
+        continuation, finish_reason = _continue_from_docs(
+            engine, query, answer, grounded_docs, generation_progress=generation_progress
+        )
+        if not continuation:
+            # Nothing more produced; stop rather than spin to the cap.
+            break
+        answer += continuation
+    if finish_reason == "length" and rounds >= max_rounds:
+        logger.warning(
+            "Answer still truncated after %d continuation round(s) for query %r; "
+            "raise LLM_MAX_TOKENS or MAX_CONTINUATION_ROUNDS.",
+            max_rounds,
+            query,
+        )
+    return answer, finish_reason
+
+
 def _warn_if_gate_open(settings: Settings) -> None:
     """Warn when MIN_SCORE == 0: the hard grounding gate is disabled (fail-open)."""
     if settings.min_score <= 0.0:
@@ -206,15 +282,30 @@ def run_query(
         prompt=prompt,
         streaming_callback=streaming_callback,
     )
-    if finish_reason_callback:
-        finish_reason_callback(_first_finish_reason(result))
     reply = _generated_reply(result, streamed_chunks)
     if not reply:
         # Distinct from a grounding abstention: the LLM produced nothing (network
         # error, context overflow, refusal). Same return, but make it detectable.
         logger.warning("Generator returned no replies for query %r", query)
+        if finish_reason_callback:
+            finish_reason_callback(_first_finish_reason(result))
         return ABSTENTION_ANSWER, documents
-    return reply, documents
+
+    # Transparently finish a length-truncated answer from the same grounded
+    # chunks (parity with run_query_reranked), bounded by the round cap.
+    answer, finish_reason = _complete_truncated_answer(
+        engine,
+        query,
+        reply,
+        _first_finish_reason(result),
+        documents,
+        max_rounds=settings.max_continuation_rounds,
+        progress=progress,
+        generation_progress=generation_progress,
+    )
+    if finish_reason_callback:
+        finish_reason_callback(finish_reason)
+    return answer, documents
 
 
 # --- reranking (post-retrieval) -----------------------------------------
@@ -376,13 +467,29 @@ def run_query_reranked(
         prompt=prompt,
         streaming_callback=streaming_callback,
     )
-    if finish_reason_callback:
-        finish_reason_callback(_first_finish_reason(result))
     reply = _generated_reply(result, streamed_chunks)
     if not reply:
         logger.warning("Generator returned no replies for query %r", query)
+        if finish_reason_callback:
+            finish_reason_callback(_first_finish_reason(result))
         return ABSTENTION_ANSWER, ranked_sources
-    return reply, ranked_sources
+
+    # The summary of a finite slug of sources is itself finite: if the backend
+    # truncated on length, transparently continue from the SAME grounded chunks
+    # (no fresh retrieval) until it stops naturally or the round cap is hit.
+    answer, finish_reason = _complete_truncated_answer(
+        engine,
+        query,
+        reply,
+        _first_finish_reason(result),
+        [rs.document for rs in llm_sources],
+        max_rounds=settings.max_continuation_rounds,
+        progress=progress,
+        generation_progress=generation_progress,
+    )
+    if finish_reason_callback:
+        finish_reason_callback(finish_reason)
+    return answer, ranked_sources
 
 
 def continue_reranked_answer(
@@ -405,22 +512,11 @@ def continue_reranked_answer(
     if not grounded:
         return ""
 
-    source_text = "\n".join(
-        f"[Source {i}]\n{doc.content}" for i, doc in enumerate(grounded, start=1)
-    )
-    prompt = (
-        CONTINUE_RAG_PROMPT_TEMPLATE.replace("__SOURCES__", source_text)
-        .replace("__QUESTION__", query)
-        .replace("__PARTIAL_ANSWER__", partial_answer)
-    )
-    streaming_callback, streamed_chunks = _generation_callbacks(generation_progress)
-    result = engine.generator.run(
-        prompt=prompt,
-        streaming_callback=streaming_callback,
+    reply, finish_reason = _continue_from_docs(
+        engine, query, partial_answer, grounded, generation_progress=generation_progress
     )
     if finish_reason_callback:
-        finish_reason_callback(_first_finish_reason(result))
-    reply = _generated_reply(result, streamed_chunks)
+        finish_reason_callback(finish_reason)
     if not reply:
         logger.warning("Generator returned no continuation for query %r", query)
         return ""

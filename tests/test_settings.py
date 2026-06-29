@@ -146,3 +146,15 @@ def test_invalid_ingest_embed_batch_size_rejected(clean_env) -> None:
     clean_env.setenv("INGEST_EMBED_BATCH_SIZE", "0")
     with pytest.raises(ValueError, match="INGEST_EMBED_BATCH_SIZE"):
         _settings()
+
+
+def test_max_continuation_rounds_default_and_override(clean_env) -> None:
+    assert _settings().max_continuation_rounds == 8
+    clean_env.setenv("MAX_CONTINUATION_ROUNDS", "3")
+    assert _settings().max_continuation_rounds == 3
+
+
+def test_invalid_max_continuation_rounds_rejected(clean_env) -> None:
+    clean_env.setenv("MAX_CONTINUATION_ROUNDS", "-1")
+    with pytest.raises(ValueError, match="MAX_CONTINUATION_ROUNDS"):
+        _settings()

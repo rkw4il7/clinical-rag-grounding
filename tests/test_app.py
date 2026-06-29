@@ -129,9 +129,17 @@ def test_score_str_formats_score() -> None:
 
 
 def test_answer_may_be_incomplete_detects_token_limit_and_mid_sentence() -> None:
-    assert _answer_may_be_incomplete("Weight Management: Advise weight loss for", "stop")
+    # length = cap hit, still truncated.
     assert _answer_may_be_incomplete("Complete sentence.", "length")
+    # No finish reason at all → fall back to mid-sentence heuristic.
+    assert _answer_may_be_incomplete("Weight Management: Advise weight loss for", None)
+    # Clean stop is TRUSTED even if it ends on a word (no false positive).
+    assert not _answer_may_be_incomplete("Advise weight loss for the patient", "stop")
     assert not _answer_may_be_incomplete("Complete sentence.", "stop")
+    # No-finish-reason but properly terminated → complete.
+    assert not _answer_may_be_incomplete("Complete sentence.", None)
+    # Any other reason (e.g. content_filter) is treated as incomplete.
+    assert _answer_may_be_incomplete("Partial", "content_filter")
     assert not _answer_may_be_incomplete("Insufficient grounding in the corpus to answer.", None)
 
 
