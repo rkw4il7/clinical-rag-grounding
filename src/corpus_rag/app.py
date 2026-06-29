@@ -287,6 +287,26 @@ def _loaded_documents() -> list[tuple[str, int]]:
     return [(str(name), int(n)) for name, n in rows]
 
 
+def _corpus_has_documents() -> bool:
+    """True if the store holds at least one chunk.
+
+    Plain query with NO Streamlit calls, so it is safe to run BEFORE
+    ``st.set_page_config`` to choose the initial sidebar state. A missing table
+    (fresh DB) or an unreachable store both count as "empty".
+    """
+    import psycopg
+
+    try:
+        with psycopg.connect(get_settings().pg_conn_str) as conn:
+            row = conn.execute("SELECT EXISTS (SELECT 1 FROM haystack_documents)").fetchone()
+    except psycopg.errors.UndefinedTable:
+        return False
+    except Exception:  # noqa: BLE001 — store unreachable: treat as empty, don't crash
+        logger.exception("Corpus presence check failed")
+        return False
+    return bool(row and row[0])
+
+
 def _unload_document(name: str) -> int:
     """Delete every chunk whose display name == ``name``; return rows removed.
 
@@ -318,44 +338,14 @@ def _render_ingest_sidebar() -> None:
     #
     # NOTE: fragments cannot call st.sidebar themselves — the caller wraps this in
     # `with st.sidebar:` (see main()).
-    st.header("Documents")
-
-    # Current corpus state drives the DEFAULT visibility of the management UI.
-    # Create the store table on a fresh DB so the corpus is usable with zero prior
-    # ingest; tolerate the store being unreachable.
-    try:
-        _ensure_store_ready()
-        loaded = _loaded_documents()
-        store_ok = True
-    except Exception:  # noqa: BLE001 — store may be down; don't crash the page
-        logger.exception("Listing loaded documents failed")
-        loaded = []
-        store_ok = False
-    has_docs = bool(loaded)
-
-    # Show document management by DEFAULT only when the corpus is EMPTY (the user
-    # must add documents before querying); hide it when documents already exist so
-    # the app opens on the RAG explorer. The toggle stays visible either way, so a
-    # populated corpus can still be managed on demand.
-    if "show_doc_mgmt" not in st.session_state:
-        st.session_state["show_doc_mgmt"] = not has_docs
-    st.toggle("Manage documents", key="show_doc_mgmt")
-
-    if not st.session_state["show_doc_mgmt"]:
-        if has_docs:
-            st.caption(f"{len(loaded)} source(s) loaded.")
-        elif store_ok:
-            st.caption("No documents ingested yet.")
-        else:
-            st.caption("Could not reach the vector store.")
-        return
-
-    if not store_ok:
-        st.caption("Could not reach the vector store.")
-        return
-
+    # Whether this whole sidebar is shown or collapsed is decided in main() via
+    # st.set_page_config(initial_sidebar_state=...): collapsed when the corpus
+    # already has documents (open on the RAG explorer), expanded when it is empty
+    # (the user must add documents first). The native sidebar chevron reopens it.
     cap_mb = get_settings().upload_max_mb
     cap_bytes = cap_mb * 1024 * 1024
+
+    st.header("Documents")
     st.caption(
         f"Upload to ingest ({', '.join(ALLOWED_UPLOAD_TYPES)}). File Size Limit: {cap_mb} MB"
     )
@@ -419,6 +409,15 @@ def _render_ingest_sidebar() -> None:
         st.rerun()
 
     st.subheader("Sources Currently Loaded")
+    # Create the store table on a fresh DB so the corpus is usable with zero prior
+    # ingest; tolerate the store being unreachable.
+    try:
+        _ensure_store_ready()
+        loaded = _loaded_documents()
+    except Exception:  # noqa: BLE001 — store may be down; don't crash the page
+        logger.exception("Listing loaded documents failed")
+        st.caption("Could not reach the vector store.")
+        return
     if not loaded:
         st.caption("No documents ingested yet.")
         return
@@ -461,7 +460,18 @@ def main() -> None:
     # on import (so tests that import this module keep their warnings intact).
     quiet_noisy_upstream()
 
-    st.set_page_config(page_title="Grounded RAG Explorer", layout="wide")
+    # Collapse the document-management sidebar by default once the corpus has
+    # documents (open on the RAG explorer); expand it when empty so the user adds
+    # documents first. This is the only programmatic sidebar control Streamlit
+    # offers — the initial state per load; the user can reopen via the chevron.
+    # _corpus_has_documents() makes no Streamlit calls, so it is safe before
+    # set_page_config (which must be the first Streamlit command).
+    sidebar_state = "collapsed" if _corpus_has_documents() else "expanded"
+    st.set_page_config(
+        page_title="Grounded RAG Explorer",
+        layout="wide",
+        initial_sidebar_state=sidebar_state,
+    )
     st.title("Grounded RAG Explorer")
 
     # Fragments cannot call st.sidebar internally, so put it on the sidebar here.
