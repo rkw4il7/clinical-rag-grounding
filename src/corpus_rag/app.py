@@ -318,10 +318,44 @@ def _render_ingest_sidebar() -> None:
     #
     # NOTE: fragments cannot call st.sidebar themselves — the caller wraps this in
     # `with st.sidebar:` (see main()).
+    st.header("Documents")
+
+    # Current corpus state drives the DEFAULT visibility of the management UI.
+    # Create the store table on a fresh DB so the corpus is usable with zero prior
+    # ingest; tolerate the store being unreachable.
+    try:
+        _ensure_store_ready()
+        loaded = _loaded_documents()
+        store_ok = True
+    except Exception:  # noqa: BLE001 — store may be down; don't crash the page
+        logger.exception("Listing loaded documents failed")
+        loaded = []
+        store_ok = False
+    has_docs = bool(loaded)
+
+    # Show document management by DEFAULT only when the corpus is EMPTY (the user
+    # must add documents before querying); hide it when documents already exist so
+    # the app opens on the RAG explorer. The toggle stays visible either way, so a
+    # populated corpus can still be managed on demand.
+    if "show_doc_mgmt" not in st.session_state:
+        st.session_state["show_doc_mgmt"] = not has_docs
+    st.toggle("Manage documents", key="show_doc_mgmt")
+
+    if not st.session_state["show_doc_mgmt"]:
+        if has_docs:
+            st.caption(f"{len(loaded)} source(s) loaded.")
+        elif store_ok:
+            st.caption("No documents ingested yet.")
+        else:
+            st.caption("Could not reach the vector store.")
+        return
+
+    if not store_ok:
+        st.caption("Could not reach the vector store.")
+        return
+
     cap_mb = get_settings().upload_max_mb
     cap_bytes = cap_mb * 1024 * 1024
-
-    st.header("Documents")
     st.caption(
         f"Upload to ingest ({', '.join(ALLOWED_UPLOAD_TYPES)}). File Size Limit: {cap_mb} MB"
     )
@@ -385,15 +419,6 @@ def _render_ingest_sidebar() -> None:
         st.rerun()
 
     st.subheader("Sources Currently Loaded")
-    # Create the store table on a fresh DB so the corpus is usable with zero
-    # prior ingest; tolerate the store being unreachable.
-    try:
-        _ensure_store_ready()
-        loaded = _loaded_documents()
-    except Exception:  # noqa: BLE001 — store may be down; don't crash the page
-        logger.exception("Listing loaded documents failed")
-        st.caption("Could not reach the vector store.")
-        return
     if not loaded:
         st.caption("No documents ingested yet.")
         return
@@ -436,8 +461,8 @@ def main() -> None:
     # on import (so tests that import this module keep their warnings intact).
     quiet_noisy_upstream()
 
-    st.set_page_config(page_title="Corpus RAG Explorer", layout="wide")
-    st.title("Corpus RAG Explorer")
+    st.set_page_config(page_title="Grounded RAG Explorer", layout="wide")
+    st.title("Grounded RAG Explorer")
 
     # Fragments cannot call st.sidebar internally, so put it on the sidebar here.
     with st.sidebar:

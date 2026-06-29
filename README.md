@@ -1,8 +1,8 @@
 # OmniCorpus
 
-Clinical RAG over multiple sources — semantic retrieval + **grounded** generation
-over a heterogeneous document corpus, with a Streamlit UI that shows the answer
-**beside its verbatim sources**.
+**Grounded RAG Explorer** — clinical RAG over multiple sources: semantic retrieval
++ **grounded** generation over a heterogeneous document corpus, with a Streamlit UI
+that shows the answer **beside its verbatim sources**.
 
 ## PHI / safety note
 
