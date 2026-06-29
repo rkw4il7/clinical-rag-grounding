@@ -51,6 +51,50 @@ _UPLOAD_ZONE_CSS = """
 </style>
 """
 
+# Restyle st.tabs from Streamlit's minimal underline into a classic Windows/Mac
+# "folder tab" set: bordered tabs with rounded tops sitting on the content pane,
+# the active tab merged into the pane below it. Targets BaseWeb's internal
+# data-baseweb hooks — revisit on a Streamlit/BaseWeb upgrade. Dark blue (#00008b)
+# matches the Sources table borders for a consistent look.
+_TABSET_CSS = """
+<style>
+/* The tab strip sits on a single bottom line that doubles as the pane's top edge. */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 4px;
+    border-bottom: 1px solid #00008b;
+}
+/* Kill BaseWeb's default sliding underline + border so only our folders show. */
+.stTabs [data-baseweb="tab-highlight"],
+.stTabs [data-baseweb="tab-border"] {
+    background-color: transparent;
+    height: 0;
+}
+/* Each tab: a bordered folder with rounded top corners, overlapping the strip line. */
+.stTabs [data-baseweb="tab"] {
+    height: auto;
+    padding: 6px 16px;
+    margin-bottom: -1px;
+    background: #f0f2f6;
+    border: 1px solid #00008b;
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+}
+/* Active tab: white fill, its bottom edge erased so it connects to the pane. */
+.stTabs [aria-selected="true"] {
+    background: #ffffff;
+    border-bottom: 1px solid #ffffff;
+    font-weight: 600;
+}
+/* The content pane: a box under the tabs (top edge = the strip's bottom line). */
+.stTabs [data-baseweb="tab-panel"] {
+    border: 1px solid #00008b;
+    border-top: none;
+    border-radius: 0 0 6px 6px;
+    padding: 12px 16px;
+}
+</style>
+"""
+
 _COMPLETE_ANSWER_ENDINGS = tuple(".!?:;)]}\"'")
 
 
@@ -460,6 +504,7 @@ def main() -> None:
     # them); below-floor / beyond-top-K candidates did not contribute → not shown.
     grounded = [s for s in sources if s.used_for_grounding]
 
+    st.markdown(_TABSET_CSS, unsafe_allow_html=True)
     tab_response, tab_sources = st.tabs(["Response", "Sources"])
 
     with tab_response:
