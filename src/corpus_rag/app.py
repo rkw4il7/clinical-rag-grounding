@@ -402,36 +402,25 @@ def main() -> None:
     query = st.chat_input("Ask a question about the corpus")
     if query:
         try:
-            # st.status keeps an animated spinner for the WHOLE query, including
-            # the auto-continuation rounds. Its label is driven by the pipeline's
-            # progress callback, so a length-truncated answer being extended shows
-            # "Generating more of the response…" instead of looking frozen between
-            # the model round-trips (which do not stream while a turn is in flight).
+            # Single status line for the WHOLE query, including auto-continuation
+            # rounds. Its label is driven by the pipeline's progress callback, so a
+            # length-truncated answer being extended shows "Extending response…"
+            # instead of looking frozen between model round-trips. No separate
+            # streamed-text preview (that read as a confusing second status line);
+            # the finished answer renders once below.
             status = st.status("Starting RAG query…", expanded=False)
-            response_preview = st.empty()
-            streamed_answer: list[str] = []
             finish_reasons: list[str | None] = []
 
             def show_query_progress(message: str) -> None:
                 status.update(label=message)
 
-            def show_generation_progress(text: str) -> None:
-                if not text:
-                    return
-                streamed_answer.append(text)
-                # Trailing marker signals the answer is still being written, so a
-                # short first segment does not read as a finished (truncated) reply.
-                response_preview.markdown("".join(streamed_answer) + " ▌")
-
             answer, sources = run_query_reranked(
                 query,
                 engine=_get_engine(),
                 progress=show_query_progress,
-                generation_progress=show_generation_progress,
                 finish_reason_callback=finish_reasons.append,
             )
             status.update(label="Response ready", state="complete")
-            response_preview.empty()
             st.session_state["rag_result"] = {
                 "query": query,
                 "answer": answer,
@@ -456,56 +445,59 @@ def main() -> None:
     sources = result["sources"]
     finish_reason = result.get("finish_reason")
 
-    # Render the query as plain text (avoid interpreting Markdown in user input).
-    st.write("**Query:**", query)
+    # "Query" as a subheader (parity with the tab labels) with the question on the
+    # next line, rendered as plain text so Markdown in user input is not interpreted.
+    st.subheader("Query")
+    st.text(query)
 
-    st.subheader("Response")
-    # Length-truncated answers are now continued automatically inside the query
-    # pipeline (transparent to the user). If one is STILL incomplete here, the
-    # continuation cap was hit — surface a passive note, no manual action.
-    if _answer_may_be_incomplete(answer, finish_reason):
-        st.warning(
-            "The response may still be incomplete after automatic continuation. "
-            "Increase LLM_MAX_TOKENS or MAX_CONTINUATION_ROUNDS for longer answers."
-        )
-    if answer == ABSTENTION_ANSWER:
-        st.warning(answer)
-    else:
-        st.markdown(answer)
-
-    # Show exactly the chunks the generator was fed (the pipeline marks them);
-    # below-floor and beyond-top-K candidates did not contribute, so they are
-    # not displayed.
+    # §2A.4: the grounded chunks the generator was actually fed (the pipeline marks
+    # them); below-floor / beyond-top-K candidates did not contribute → not shown.
     grounded = [s for s in sources if s.used_for_grounding]
 
-    st.subheader("Sources")
-    if not grounded:
-        st.info(
-            "No retrieved chunk met the MIN_SCORE grounding floor — the response above abstains."
-        )
-        return
+    tab_response, tab_sources = st.tabs(["Response", "Sources"])
 
-    # §2A.4: grounded sources co-rendered with the response, ordered by rerank
-    # score (highest first). One table — Source title left, score columns, then
-    # verbatim chunk text. "ReRank" = cross-encoder score; "Similarity" = cosine.
-    grounded = sorted(
-        grounded,
-        key=lambda s: (s.rerank_score is not None, s.rerank_score or 0.0),
-        reverse=True,
-    )
-    st.dataframe(
-        [
-            {
-                "Source": _source_title(s.document),
-                "ReRank": _score_str(s.rerank_score),
-                "Similarity": _score_str(s.cosine_score),
-                "Chunk text": s.document.content,
-            }
-            for s in grounded
-        ],
-        use_container_width=True,
-        hide_index=True,
-    )
+    with tab_response:
+        # Length-truncated answers are continued automatically inside the query
+        # pipeline (transparent). If one is STILL incomplete here, the continuation
+        # cap was hit — surface a passive note, no manual action.
+        if _answer_may_be_incomplete(answer, finish_reason):
+            st.warning(
+                "The response may still be incomplete after automatic continuation. "
+                "Increase LLM_MAX_TOKENS or MAX_CONTINUATION_ROUNDS for longer answers."
+            )
+        if answer == ABSTENTION_ANSWER:
+            st.warning(answer)
+        else:
+            st.markdown(answer)
+
+    with tab_sources:
+        if not grounded:
+            st.info(
+                "No retrieved chunk met the MIN_SCORE grounding floor — "
+                "the response abstains."
+            )
+        else:
+            # Grounded sources ordered by rerank score (highest first). One table:
+            # Source title, score columns, then verbatim chunk text. "ReRank" =
+            # cross-encoder score; "Similarity" = cosine.
+            grounded = sorted(
+                grounded,
+                key=lambda s: (s.rerank_score is not None, s.rerank_score or 0.0),
+                reverse=True,
+            )
+            st.dataframe(
+                [
+                    {
+                        "Source": _source_title(s.document),
+                        "ReRank": _score_str(s.rerank_score),
+                        "Similarity": _score_str(s.cosine_score),
+                        "Chunk text": s.document.content,
+                    }
+                    for s in grounded
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
 
 
 if __name__ == "__main__":
