@@ -239,3 +239,5 @@ uploads/
 .idea/workspace.xml
 .idea/usage.statistics.xml
 .idea/shelf/
+# Zencoder chat transcripts: per-session, large, not project config.
+.idea/zencoder/chats/
