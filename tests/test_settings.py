@@ -149,9 +149,9 @@ def test_invalid_ingest_embed_batch_size_rejected(clean_env) -> None:
 
 
 def test_max_continuation_rounds_default_and_override(clean_env) -> None:
-    assert _settings().max_continuation_rounds == 8
-    clean_env.setenv("MAX_CONTINUATION_ROUNDS", "3")
     assert _settings().max_continuation_rounds == 3
+    clean_env.setenv("MAX_CONTINUATION_ROUNDS", "6")
+    assert _settings().max_continuation_rounds == 6
 
 
 def test_invalid_max_continuation_rounds_rejected(clean_env) -> None:

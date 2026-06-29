@@ -44,6 +44,16 @@ QueryProgress = Callable[[str], None]
 GenerationProgress = Callable[[str], None]
 FinishReasonCallback = Callable[[str | None], None]
 
+# Continuation tuning. The grounded source chunks (unchanged across rounds) carry
+# the answer's content; only a short TAIL of the answer-so-far is needed as the
+# seam to continue from. Resending the WHOLE growing answer each round made prompt
+# prefill O(answer^2) and was a primary cause of slow multi-round responses.
+_CONTINUATION_TAIL_CHARS = 600
+# If a length-truncated round emits less than this, the context is effectively
+# saturated — further rounds resend an even bigger prompt for ever-smaller gains,
+# so stop instead of grinding to the round cap.
+_MIN_CONTINUATION_PROGRESS_CHARS = 32
+
 
 def _generation_callbacks(
     generation_progress: GenerationProgress | None,
@@ -107,8 +117,11 @@ def _continue_from_docs(
     already-grounded chunks (no fresh retrieval) so the continuation's safety
     boundary is identical to the original answer's.
     """
+    # Only the tail of the answer-so-far is needed as the continuation seam; the
+    # sources (unchanged) carry the grounding. Keeps the prompt bounded per round.
+    seam = partial_answer[-_CONTINUATION_TAIL_CHARS:]
     prompt = _continuation_prompt_builder().run(
-        documents=grounded_docs, query=query, partial_answer=partial_answer
+        documents=grounded_docs, query=query, partial_answer=seam
     )["prompt"]
     streaming_callback, streamed_chunks = _generation_callbacks(generation_progress)
     result = engine.generator.run(prompt=prompt, streaming_callback=streaming_callback)
@@ -145,6 +158,17 @@ def _complete_truncated_answer(
             # Nothing more produced; stop rather than spin to the cap.
             break
         answer += continuation
+        # Non-progress guard: still length-truncated but barely any new text means
+        # the context is saturated — continuing only gets slower. Stop early.
+        progressed = len(continuation.strip())
+        if finish_reason == "length" and progressed < _MIN_CONTINUATION_PROGRESS_CHARS:
+            logger.warning(
+                "Continuation produced only %d chars while still length-truncated "
+                "for query %r; stopping (context likely saturated).",
+                progressed,
+                query,
+            )
+            break
     if finish_reason == "length" and rounds >= max_rounds:
         logger.warning(
             "Answer still truncated after %d continuation round(s) for query %r; "

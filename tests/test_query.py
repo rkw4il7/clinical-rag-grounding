@@ -348,8 +348,11 @@ def test_rerank_auto_continue_respects_round_cap() -> None:
     """Persistent length truncation stops at MAX_CONTINUATION_ROUNDS, not forever."""
     a = Document(content="aaa", score=0.9)
     engine = _rerank_engine([a], [(a, 0.95)], reply="unused")
+    # Each round emits a healthy chunk (above the non-progress threshold) so the
+    # cap — not the saturation guard — is what stops the loop.
+    seg = "a meaningful continuation segment of grounded prose. "
     engine.generator.run.return_value = {
-        "replies": ["seg "],
+        "replies": [seg],
         "meta": [{"finish_reason": "length"}],
     }
     finish_reasons = []
@@ -363,8 +366,32 @@ def test_rerank_auto_continue_respects_round_cap() -> None:
 
     # Initial generation + exactly 2 continuation rounds (the cap).
     assert engine.generator.run.call_count == 3
-    assert answer == "seg seg seg "
+    assert answer == seg * 3
     assert finish_reasons == ["length"]  # still truncated; surfaced to the UI
+
+
+def test_rerank_auto_continue_stops_on_non_progress() -> None:
+    """A length-truncated round that barely progresses halts early (saturation)."""
+    a = Document(content="aaa", score=0.9)
+    engine = _rerank_engine([a], [(a, 0.95)], reply="unused")
+    # Always length-truncated but only a sliver of text → context saturated.
+    engine.generator.run.return_value = {
+        "replies": ["x"],
+        "meta": [{"finish_reason": "length"}],
+    }
+    finish_reasons = []
+
+    answer, _ = run_query_reranked(
+        "q",
+        engine=engine,
+        settings=_settings(max_continuation_rounds=5),
+        finish_reason_callback=finish_reasons.append,
+    )
+
+    # Initial + ONE continuation, then the non-progress guard stops it (not 5).
+    assert engine.generator.run.call_count == 2
+    assert answer == "xx"
+    assert finish_reasons == ["length"]
 
 
 def test_continue_reranked_answer_uses_grounded_sources_only() -> None:

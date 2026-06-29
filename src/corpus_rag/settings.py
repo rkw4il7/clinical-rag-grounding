@@ -93,8 +93,10 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 4096
     # Cap on automatic continuation turns when a length-truncated answer is
     # transparently resumed from the same grounded chunks. Bounds worst-case cost
-    # (each round can emit up to llm_max_tokens) while letting long summaries finish.
-    max_continuation_rounds: int = 8
+    # (each round is a full LLM round-trip emitting up to llm_max_tokens) while
+    # letting long summaries finish. Kept low for interactive latency; the
+    # non-progress guard also stops early once context is saturated.
+    max_continuation_rounds: int = 3
 
     # Corpus origins: JSON array of {adapter, root|url, ...} objects.
     corpus_sources: list[SourceConfig] = Field(default_factory=list)
