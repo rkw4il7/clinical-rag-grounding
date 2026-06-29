@@ -54,7 +54,8 @@ _UPLOAD_ZONE_CSS = """
     justify-content: center;
 }
 .st-key-delete-center [data-testid="stButton"] {
-    text-align: center;
+    display: flex;
+    justify-content: center;
 }
 </style>
 """
