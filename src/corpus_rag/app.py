@@ -408,12 +408,20 @@ def _render_ingest_sidebar() -> None:
                 f"Upload too large ({total_bytes // 1024 // 1024} MB); limit is {cap_mb} MB.",
             )
         else:
+            ingest_status = None
             try:
+                # Warm the cached ingest models FIRST so the @st.cache_resource
+                # load spinner fires alone, not stacked under our status box (same
+                # pattern as the query path). Cached, so the call inside
+                # _ingest_uploads is then a no-op.
+                _get_ingest_components()
+
+                # ONE status box; the progress bar is nested INSIDE it (not a
+                # separate top-level element) so the user sees a single indicator.
                 ingest_status = st.status("Ingesting upload...", expanded=True)
-                ingest_progress = st.progress(0, text="Starting ingest")
+                ingest_progress = ingest_status.progress(0, text="Starting ingest")
 
                 def show_ingest_progress(message: str, done: int = 0, total: int = 0) -> None:
-                    ingest_status.update(label="Ingesting upload...", state="running")
                     if total > 0:
                         ingest_progress.progress(
                             min(done / total, 1.0),
@@ -432,6 +440,10 @@ def _render_ingest_sidebar() -> None:
                 )
             except Exception:  # noqa: BLE001 — generic message; detail to logs
                 logger.exception("Ingest failed")
+                # Settle the spinner immediately (if the status box was created)
+                # rather than leaving it animated until the rerun.
+                if ingest_status is not None:
+                    ingest_status.update(label="Ingest failed", state="error")
                 st.session_state["ingest_msg"] = (
                     "err",
                     "Ingest failed. Check the server logs for details.",
@@ -505,7 +517,10 @@ def main() -> None:
     # documents first. This is the only programmatic sidebar control Streamlit
     # offers — the initial state per load; the user can reopen via the chevron.
     # _corpus_has_documents() makes no Streamlit calls, so it is safe before
-    # set_page_config (which must be the first Streamlit command).
+    # set_page_config (which must be the first Streamlit command). Deliberately
+    # NOT @st.cache_data: that machinery before set_page_config risks the
+    # "first command" rule and adds an invalidation burden, and a single
+    # SELECT EXISTS per rerun is negligible for this single-user app.
     sidebar_state = "collapsed" if _corpus_has_documents() else "expanded"
     st.set_page_config(
         page_title="Grounded RAG Explorer",
@@ -539,22 +554,31 @@ def main() -> None:
         # first query, so this is a no-op spinner thereafter.
         engine = _get_engine()
 
-        # One status line, in a placeholder we clear at the end so it shows ONLY
-        # while working. Its label is driven by the pipeline's progress callback, so
-        # an answer being extended shows "Extending response…" rather than looking
-        # frozen between the model round-trips.
+        # ONE status component. The step messages drive its label; the streamed
+        # tokens render into a single placeholder NESTED INSIDE the same status box
+        # (not a second widget). So the user sees live streaming and a single
+        # status — both fed here — and the whole box is cleared at the end, with the
+        # finished answer rendered in the Response tab below.
         status_area = st.empty()
         try:
-            status = status_area.status("Starting RAG query…", expanded=False)
+            status = status_area.status("Starting RAG query…", expanded=True)
+            answer_preview = status.empty()
+            streamed: list[str] = []
             finish_reasons: list[str | None] = []
 
             def show_query_progress(message: str) -> None:
                 status.update(label=message)
 
+            def show_generation_progress(text: str) -> None:
+                if text:
+                    streamed.append(text)
+                    answer_preview.markdown("".join(streamed))
+
             answer, sources = run_query_reranked(
                 pending,
                 engine=engine,
                 progress=show_query_progress,
+                generation_progress=show_generation_progress,
                 finish_reason_callback=finish_reasons.append,
             )
             status_area.empty()
