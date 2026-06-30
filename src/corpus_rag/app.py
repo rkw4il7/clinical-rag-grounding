@@ -104,7 +104,7 @@ _TABSET_CSS = """
 # the busy run; a scoped display:none reliably removes the rendered widget (which
 # st.empty()/pruning cannot, since chat_input self-pins to the app bottom chrome).
 _HIDE_CHAT_INPUT_CSS = (
-    "<style>[data-testid=\"stChatInput\"], "
+    '<style>[data-testid="stChatInput"], '
     '[data-testid="stChatInputContainer"] { display: none !important; }</style>'
 )
 
@@ -642,10 +642,7 @@ def main() -> None:
 
     with tab_sources:
         if not grounded:
-            st.info(
-                "No retrieved chunk met the MIN_SCORE grounding floor — "
-                "the response abstains."
-            )
+            st.info("No retrieved chunk met the MIN_SCORE grounding floor — the response abstains.")
         else:
             # Grounded sources ordered by rerank score (highest first). One table:
             # Source title, score columns, then verbatim chunk text. "ReRank" =
