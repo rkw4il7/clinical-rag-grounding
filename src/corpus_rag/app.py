@@ -123,6 +123,11 @@ section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
 
 _COMPLETE_ANSWER_ENDINGS = tuple(".!?:;)]}\"'")
 
+# Cap the Sources table to this many visible rows; past it, st.dataframe scrolls
+# (a fixed pixel height is the only lever — there is no row-count parameter).
+_SOURCES_TABLE_MAX_ROWS = 15
+_DATAFRAME_ROW_PX = 35  # approx Streamlit row height; +1 for the header row
+
 
 def first_line(content: str, max_len: int = _FIRST_LINE_MAX) -> str:
     """Derive the expander label from a chunk's content (root §4.4).
@@ -650,6 +655,11 @@ def main() -> None:
                 key=lambda s: (s.rerank_score is not None, s.rerank_score or 0.0),
                 reverse=True,
             )
+            # Past the row cap, pin a fixed height so the table scrolls instead of
+            # growing the page; below it, leave height auto so short tables stay compact.
+            df_kwargs = {}
+            if len(grounded) > _SOURCES_TABLE_MAX_ROWS:
+                df_kwargs["height"] = (_SOURCES_TABLE_MAX_ROWS + 1) * _DATAFRAME_ROW_PX + 3
             st.dataframe(
                 [
                     {
@@ -662,6 +672,7 @@ def main() -> None:
                 ],
                 width="stretch",
                 hide_index=True,
+                **df_kwargs,
             )
 
 
