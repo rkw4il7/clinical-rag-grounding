@@ -100,6 +100,14 @@ _TABSET_CSS = """
 </style>
 """
 
+# Hide the bottom-pinned chat input while a query is in flight. Emitted only on
+# the busy run; a scoped display:none reliably removes the rendered widget (which
+# st.empty()/pruning cannot, since chat_input self-pins to the app bottom chrome).
+_HIDE_CHAT_INPUT_CSS = (
+    "<style>[data-testid=\"stChatInput\"], "
+    '[data-testid="stChatInputContainer"] { display: none !important; }</style>'
+)
+
 _COMPLETE_ANSWER_ENDINGS = tuple(".!?:;)]}\"'")
 
 
@@ -496,16 +504,19 @@ def main() -> None:
     with st.sidebar:
         _render_ingest_sidebar()
 
-    # Host the input in a placeholder so it can be HIDDEN the moment a query is
-    # submitted. Capturing and processing the query happen in the SAME run, and
-    # input_slot.empty() is called BEFORE the slow work — that removal flushes to
-    # the browser immediately, so the input is gone for the whole retrieve→rerank
-    # →generate wait (a stale widget from a prior run would otherwise linger until
-    # the run finished). st.rerun() at the end brings the input back with the result.
-    input_slot = st.empty()
-    query = input_slot.chat_input("Ask a question...")
-    if query:
-        input_slot.empty()  # hide the input for the duration of the query
+    # Submitting stashes the query and reruns; the busy run then processes it. The
+    # chat input self-pins to the app's bottom chrome, so st.empty()/pruning cannot
+    # remove it mid-run — instead the busy run injects a scoped display:none that
+    # hides the rendered widget for the whole retrieve→rerank→generate wait. The CSS
+    # is not re-emitted on the post-processing rerun, so the input returns then.
+    pending = st.session_state.get("pending_query")
+    if pending is None:
+        typed = st.chat_input("Ask a question...")
+        if typed:
+            st.session_state["pending_query"] = typed
+            st.rerun()
+    else:
+        st.markdown(_HIDE_CHAT_INPUT_CSS, unsafe_allow_html=True)
 
         # Resolve the engine FIRST, OUTSIDE the status placeholder. On a fresh
         # process the @st.cache_resource model-load spinner fires here; doing it
@@ -527,14 +538,14 @@ def main() -> None:
                 status.update(label=message)
 
             answer, sources = run_query_reranked(
-                query,
+                pending,
                 engine=engine,
                 progress=show_query_progress,
                 finish_reason_callback=finish_reasons.append,
             )
             status_area.empty()
             st.session_state["rag_result"] = {
-                "query": query,
+                "query": pending,
                 "answer": answer,
                 "sources": sources,
                 "finish_reason": finish_reasons[0] if finish_reasons else None,
@@ -544,9 +555,11 @@ def main() -> None:
             # can embed the connection string (credentials) or other internals.
             logger.exception("Query failed")
             status_area.empty()
+            st.session_state["pending_query"] = None
             st.error("Query failed. Check the server logs for details.")
             return
         # Rerun so the input returns (and the freshly stored result renders below).
+        st.session_state["pending_query"] = None
         st.rerun()
 
     result = st.session_state.get("rag_result")
