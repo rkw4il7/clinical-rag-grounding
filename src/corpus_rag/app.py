@@ -108,6 +108,19 @@ _HIDE_CHAT_INPUT_CSS = (
     '[data-testid="stChatInputContainer"] { display: none !important; }</style>'
 )
 
+# Push the document-management sidebar content down from the very top so it sits
+# lower in the pane. The sidebar is left-docked, so horizontal centering is not
+# possible; this is the vertical offset. Targets the sidebar content wrappers
+# across Streamlit versions (internal data-testids).
+_SIDEBAR_OFFSET_CSS = """
+<style>
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"],
+section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
+    padding-top: 15vh;
+}
+</style>
+"""
+
 _COMPLETE_ANSWER_ENDINGS = tuple(".!?:;)]}\"'")
 
 
@@ -358,6 +371,7 @@ def _render_ingest_sidebar() -> None:
     cap_mb = get_settings().upload_max_mb
     cap_bytes = cap_mb * 1024 * 1024
 
+    st.markdown(_SIDEBAR_OFFSET_CSS, unsafe_allow_html=True)
     st.header("Manage Documents")
     st.caption(
         f"Upload to ingest ({', '.join(ALLOWED_UPLOAD_TYPES)}). File Size Limit: {cap_mb} MB"
