@@ -116,7 +116,7 @@ _SIDEBAR_OFFSET_CSS = """
 <style>
 section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"],
 section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
-    padding-top: 15vh;
+    padding-top: 8vh;
 }
 </style>
 """
