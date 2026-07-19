@@ -1,8 +1,15 @@
-# OmniCorpus
+# Clinical RAG Grounding
 
-**Grounded RAG Explorer** — clinical RAG over multiple sources: semantic retrieval
-+ **grounded** generation over a heterogeneous document corpus, with a Streamlit UI
-that shows the answer **beside its verbatim sources**.
+**Grounded RAG Explorer** — a clinical RAG app that never shows an answer you
+can't check. Every response is displayed **beside the byte-for-byte source text
+it was built from**, and when retrieval finds no grounding the app **abstains
+instead of falling back on the model's own knowledge**. The retrieved passage is
+both what the answer is built from *and* what you're shown to verify it — no gap
+between what grounded the answer and what you can audit.
+
+Under the hood: semantic retrieval + a hard grounding gate over a
+heterogeneous, multi-format document corpus (PDF/DOCX/PPTX/HTML/MD), served
+through a Streamlit UI. What makes it different is below, not the stack.
 
 ## PHI / safety note
 
