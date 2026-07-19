@@ -239,6 +239,7 @@ uploads/
 .idea/workspace.xml
 .idea/usage.statistics.xml
 .idea/shelf/
-# Zencoder AI-assistant artifacts: per-session, not shareable project config.
+# Zencoder chat transcripts: per-session, large, not project config.
 .idea/zencoder/chats/
-.idea/zencoder-chat-index.xml
+/qodana.yaml
+/.github/workflows/qodana_code_quality.yml
