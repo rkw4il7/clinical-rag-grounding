@@ -1,14 +1,14 @@
-"""Streamlit front end for the Corpus RAG Explorer (root ``spec.md`` §5).
+"""Streamlit front end for the Grounded RAG Explorer (root ``spec.md`` §5).
 
-Single page: a query box runs the grounded query pipeline and renders the query,
-the generated response, and — in rerank order — the chunks that actually grounded
-it (at/above the MIN_SCORE floor) as a single table: ordinal/numeric columns
-(rerank #, cosine #, Δ, scores) on the left and the **verbatim** chunk text on the
-right. Below-threshold candidates that did not contribute are not shown, and no
-internal metadata structure is dumped to the page.
+A query box runs the grounded query pipeline; the answer and its sources render in
+two tabs. The **Sources** tab lists — in rerank order — the chunks that actually
+grounded the answer (at/above the MIN_SCORE floor): the source title, the rerank
+and cosine scores, and the **verbatim** chunk text. Below-threshold candidates
+that did not contribute are not shown, and no internal metadata is dumped to the
+page.
 
 §2A.4 co-rendering: the response is never shown without its ranked, verbatim
-ground-truth sources beside it; on abstention no fabricated clinical claim is
+ground-truth sources alongside it; on abstention no fabricated clinical claim is
 shown.
 
 Run:  uv run streamlit run src/corpus_rag/app.py

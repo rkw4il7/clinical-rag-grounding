@@ -102,8 +102,10 @@ CORPUS_SOURCES=[{"adapter": "local_path", "root": "tests/data/**/*"}]
 ### 4. Run the app and ingest from the GUI
 The app starts against an **empty database** — it creates the store table on
 launch, so no prior ingest is required. Loading documents is a first-class GUI
-action: open the app, use the sidebar **"Documents"** uploader (PDF, DOCX, PPTX,
-HTML, MD) to ingest at runtime, and remove any document with its **✕**.
+action: open the app, use the sidebar **"Manage Documents"** uploader (PDF, DOCX,
+PPTX, HTML, MD) to ingest at runtime, and remove a document by selecting its row
+and clicking **"Delete selected"**. (The sidebar opens automatically when the
+corpus is empty and stays collapsed once it has documents.)
 ```bash
 uv run streamlit run src/corpus_rag/app.py
 ```
