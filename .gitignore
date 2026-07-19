@@ -241,3 +241,5 @@ uploads/
 .idea/shelf/
 # Zencoder chat transcripts: per-session, large, not project config.
 .idea/zencoder/chats/
+/qodana.yaml
+/.github/workflows/qodana_code_quality.yml
