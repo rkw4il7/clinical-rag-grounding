@@ -36,8 +36,9 @@ services:
   # (cached in the llamacache volume) and exposes the OpenAI API at /v1.
   # Behind the "llm" profile so the default `up` (DB only) is unchanged and
   # LAN-LLM users don't pull it. Runs on CPU (no Metal/CUDA in containers) —
-  # a 0.5B model keeps that usable; swap the -hf repo for a larger one if you
-  # have the cores. First start is slow (model download); watch `logs -f llm`.
+  # a 3B Q4_K_M model balances quality and CPU latency; drop to 0.5B/1.5B for
+  # leaner boxes or bump to 7B if you have the cores. First start is slow
+  # (model download); watch `logs -f llm`.
   llm:
     # `server` is a floating tag; pin to a dated build (e.g. :server-b4xxx) if you
     # need reproducibility — a future llama.cpp could change the -hf CLI syntax.
@@ -46,7 +47,10 @@ services:
     command:
       - "-hf"
       # bartowski mirrors are reliably available; swap for any small GGUF repo.
-      - "bartowski/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M"
+      # 3B Q4_K_M (~2 GB) is the quality/latency sweet spot for grounded
+      # summarization on CPU; drop to 0.5B/1.5B for faster first start on lean
+      # boxes, or 7B if you have the cores + RAM.
+      - "bartowski/Qwen2.5-3B-Instruct-GGUF:Q4_K_M"
       - "--host"
       - "0.0.0.0"
       - "--port"
