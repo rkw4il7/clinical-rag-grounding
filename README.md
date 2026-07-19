@@ -77,11 +77,12 @@ make stack                  # docker compose --profile llm up -d
 make wait                   # block until the LLM has downloaded + loaded (/health)
 make backend-docker         # point .env at the container endpoints
 ```
-The `llm` service is llama.cpp's server with a 0.5B Qwen GGUF (CPU; auto-
-downloaded, OpenAI API at `:8080/v1`). First `make stack` pulls the model, so
-`make wait` (or `docker compose --profile llm up -d --wait`) blocks on its
-`/health` until inference is actually ready. Swap the `-hf` model in
-`./docker-compose.yml` for something larger if you have the cores.
+The `llm` service is llama.cpp's server with a 3B Qwen GGUF (Q4_K_M, ~2 GB; CPU;
+auto-downloaded, OpenAI API at `:8080/v1`). First `make stack` pulls the model —
+budget for a ~2 GB download — so `make wait` (or
+`docker compose --profile llm up -d --wait`) blocks on its `/health` until
+inference is actually ready. Swap the `-hf` model in `./docker-compose.yml` for
+a smaller one (0.5B/1.5B) on a lean box, or larger if you have the cores.
 
 **Option B — your own services (LAN/remote):**
 - **Postgres + pgvector** — bundled container (`make db`) or your own server.
