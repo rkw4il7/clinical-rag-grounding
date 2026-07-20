@@ -188,9 +188,14 @@ cython_debug/
 # PyCharm
 #   JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #   be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
-#   and can be added to the global gitignore or merged into this file.  For a more nuclear
-#   option (not recommended) you can uncomment the following to ignore the entire idea folder.
-# .idea/
+#   and can be added to the global gitignore or merged into this file.
+#   IDE config is per-developer here (editors vary across the team), so .idea is
+#   ignored except for codeStyles/, which is shared formatting config.
+#   Note: `.idea/*`, not `.idea/` — git cannot re-include a path inside an
+#   excluded directory, so the negation below only works if the directory itself
+#   is never excluded.
+.idea/*
+!.idea/codeStyles/
 
 # Abstra
 #   Abstra is an AI-powered process automation framework.
@@ -234,10 +239,3 @@ tests/data/*
 
 # GUI-uploaded documents are persisted here (corpus source-of-truth), not tracked.
 uploads/
-
-# IntelliJ: track shared project config but not per-user editor/session state.
-.idea/workspace.xml
-.idea/usage.statistics.xml
-.idea/shelf/
-# Zencoder chat transcripts: per-session, large, not project config.
-.idea/zencoder/chats/
