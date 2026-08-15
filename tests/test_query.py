@@ -611,3 +611,91 @@ def test_live_rerank_overrides_cosine_order() -> None:
     # If rerank changed nothing, cosine_rank would equal rerank_rank for all.
     cosine_order = [s.cosine_rank for s in sources]
     assert cosine_order != sorted(cosine_order), "rerank did not reorder cosine list"
+
+
+def _run_reranked_capturing_prompt_docs(engine, query, settings):
+    """Run the rerank path, returning (documents-per-prompt-call, ranked sources).
+
+    Captures what is handed to the PromptBuilder — the generator sees that and
+    nothing else — instead of trusting the ``used_for_grounding`` flag the UI
+    reads. Wrapping the bound method keeps real template rendering intact.
+    """
+    captured: list[list] = []
+    original_run = engine.prompt_builder.run
+
+    def _capture(**kwargs):
+        captured.append(list(kwargs["documents"]))
+        return original_run(**kwargs)
+
+    engine.prompt_builder.run = _capture
+    try:
+        _, sources = run_query_reranked(query, engine=engine, settings=settings)
+    finally:
+        engine.prompt_builder.run = original_run
+    return captured, sources
+
+
+def _grounded_sources(sources, settings):
+    """Sources clearing the MIN_SCORE cosine floor, in rerank order (§2A.3).
+
+    The gate is a COSINE floor applied to a rerank-ordered list, so the grounded
+    set is not necessarily a prefix of the rerank ranking.
+    """
+    return [
+        s
+        for s in sources
+        if settings.min_score <= 0.0 or (s.cosine_score or 0.0) >= settings.min_score
+    ]
+
+
+@pytest.mark.live
+def test_live_rerank_sends_only_top_k_chunks_to_generator() -> None:
+    """TOP_K is the generator cut, not the retrieval depth (rerank path).
+
+    Live counterpart to the fake-engine
+    ``test_rerank_grounds_llm_on_top_k_only_but_returns_all_candidates``,
+    asserted against the real retriever, cross-encoder and PromptBuilder.
+
+    TOP_K is lowered to half the grounded set rather than used as configured, so
+    the cut is exercised on ANY corpus. At the deployed TOP_K a small corpus can
+    ground fewer chunks than the limit, making the truncation untestable — that
+    is a property of the corpus, not of the code, and it must not silently turn
+    this into a no-op assertion.
+    """
+    engine, store, settings = _live_rerank_engine_and_store()
+    query = _corpus_answerable_query(store, settings)
+
+    captured, sources = _run_reranked_capturing_prompt_docs(engine, query, settings)
+    grounded = _grounded_sources(sources, settings)
+    if not grounded:
+        pytest.skip("No chunk cleared MIN_SCORE; the TOP_K cut never runs.")
+
+    # 1. At the configured TOP_K: the prompt gets exactly min(TOP_K, grounded).
+    expected = min(settings.top_k, len(grounded))
+    assert captured, "prompt builder was never called — generator ran ungrounded"
+    sent = captured[0]
+    assert len(sent) == expected
+    assert [d.id for d in sent] == [s.document.id for s in grounded[:expected]]
+    # used_for_grounding must describe the same set the prompt really got.
+    assert [d.id for d in sent] == [s.document.id for s in sources if s.used_for_grounding]
+    # All candidates stay surfaced for display: the cut is generator-only.
+    assert len(sources) == min(settings.rerank_candidates, store.count_documents())
+    # Continuation rounds re-prompt from the SAME chunks; never widen past TOP_K.
+    assert all(len(docs) <= expected for docs in captured)
+
+    # 2. Force the cut to bite: a TOP_K strictly below the grounded count must
+    #    truncate, whatever the corpus size.
+    if len(grounded) < 2:
+        pytest.skip("Only one grounded chunk; no TOP_K below it can truncate.")
+    cut = len(grounded) // 2
+    narrowed = settings.model_copy(update={"top_k": cut})
+    captured_cut, sources_cut = _run_reranked_capturing_prompt_docs(engine, query, narrowed)
+    grounded_cut = _grounded_sources(sources_cut, narrowed)
+
+    assert captured_cut, "prompt builder was never called under the narrowed TOP_K"
+    sent_cut = captured_cut[0]
+    assert len(sent_cut) == cut
+    assert len(sent_cut) < len(grounded_cut)  # the cut discarded real candidates
+    assert [d.id for d in sent_cut] == [s.document.id for s in grounded_cut[:cut]]
+    # Retrieval depth is unchanged by TOP_K — RERANK_CANDIDATES still governs it.
+    assert len(sources_cut) == len(sources)
